@@ -1,0 +1,610 @@
+/* =========================================================
+   TTQ STYLES
+   - Dashboard
+   - Materials
+   - Stock In/Out
+   ========================================================= */
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #f6f8fc;
+  color: #111827;
+}
+
+/* =======================
+   TOPBAR dùng chung
+   ======================= */
+.ttq-topbar {
+  height: 64px;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 18px;
+}
+
+.ttq-topbar-left {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.ttq-topbar-logo {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+  border-radius: 10px;
+}
+
+.ttq-topbar-title {
+  font-weight: 800;
+  font-size: 16px;
+}
+
+.ttq-topbar-sub {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.ttq-topbar-right {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.ttq-pill {
+  background: #eef2ff;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.ttq-btn-outline {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  padding: 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.ttq-btn {
+  background: #2563eb;
+  color: #fff;
+  border: 1px solid #2563eb;
+  padding: 10px 12px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.ttq-btn-ghost {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-weight: 800;
+  color: #2563eb;
+}
+
+/* =======================
+   1) DASHBOARD
+   ======================= */
+.ttq-dash { min-height: 100vh; }
+
+.ttq-dash-body {
+  display: flex;
+  gap: 16px;
+  padding: 16px;
+}
+
+.ttq-sidebar {
+  width: 320px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  padding: 14px;
+  height: fit-content;
+}
+
+.ttq-sidebar-title {
+  font-weight: 800;
+  margin-bottom: 10px;
+}
+
+.ttq-menu-card {
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  border-radius: 14px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+.ttq-menu-card.active {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.ttq-menu-head {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 12px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  text-align: left;
+  align-items: center;
+}
+
+.ttq-menu-title { font-weight: 800; }
+.ttq-menu-desc { font-size: 12px; color: #6b7280; margin-top: 4px; }
+
+.ttq-menu-body {
+  background: #fff;
+  border-top: 1px solid #e5e7eb;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ttq-menu-link {
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  padding: 10px;
+  border-radius: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  color: #111827;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ttq-main { flex: 1; }
+
+.ttq-main-head {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.ttq-main-title { font-size: 22px; margin: 0; font-weight: 900; }
+
+.ttq-main-sub {
+  margin: 6px 0 0;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.ttq-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.ttq-action-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  padding: 14px;
+  text-decoration: none;
+  color: inherit;
+  background: #fff;
+  display: block;
+}
+
+.ttq-action-card.primary { background: #2563eb; color: #fff; }
+.ttq-action-card.soft { background: #eef2ff; }
+.ttq-action-card.outline { border-style: dashed; }
+
+.ttq-action-title { font-weight: 900; }
+.ttq-action-desc { font-size: 12px; margin-top: 6px; }
+.ttq-action-go { margin-top: 10px; font-weight: 900; }
+
+.ttq-center-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.ttq-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 14px;
+}
+
+/* =======================
+   2) MATERIALS PAGE
+   (áp vào MaterialsPage.jsx bằng class ttq-page/ttq-card/ttq-table...)
+   ======================= */
+.ttq-page {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 18px 22px;
+}
+
+.ttq-page-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  margin: 10px 0 16px;
+}
+
+.ttq-h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 900;
+}
+
+.ttq-search {
+  width: min(760px, 100%);
+  border: 1px solid #cfd7e3;
+  border-radius: 14px;
+  padding: 12px 14px;
+  outline: none;
+  background: #fff;
+}
+
+.ttq-search:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.ttq-materials-grid {
+  display: grid;
+  grid-template-columns: 520px 1fr;
+  gap: 22px;
+  align-items: stretch;
+}
+
+.ttq-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.ttq-card-head {
+  padding: 14px 16px;
+  border-bottom: 1px solid #eef3f8;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.ttq-card-title { font-weight: 900; font-size: 15px; }
+.ttq-card-sub { margin-top: 4px; font-size: 12px; color: #6b7280; }
+
+.ttq-form2 { padding: 16px; }
+
+.ttq-grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.ttq-span2 { grid-column: 1 / -1; }
+
+.ttq-label2 {
+  display: block;
+  font-weight: 900;
+  font-size: 12px;
+  margin: 2px 0 6px;
+}
+
+.ttq-input2, .ttq-textarea {
+  width: 100%;
+  border: 1px solid #cfd7e3;
+  border-radius: 12px;
+  padding: 10px 12px;
+  outline: none;
+  background: #fff;
+}
+
+.ttq-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.ttq-table-wrap {
+  padding: 12px 14px 14px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.ttq-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+}
+
+.ttq-table thead th {
+  background: #fbfdff;
+  border-bottom: 1px solid #eef3f8;
+  font-weight: 900;
+  font-size: 12px;
+  padding: 10px 10px;
+}
+
+.ttq-table tbody td {
+  padding: 10px 10px;
+  border-bottom: 1px solid #f0f4f8;
+  vertical-align: top;
+}
+
+.ttq-row-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.ttq-btn-sm {
+  border: 1px solid #dbeafe;
+  background: rgba(37, 99, 235, 0.12);
+  color: #2563eb;
+  font-weight: 900;
+  padding: 7px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+/* =======================
+   3) STOCK IN/OUT
+   (chỉ cần để form không bị thô)
+   ======================= */
+.ttq-warehouse {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 18px 22px;
+}
+
+.ttq-warehouse h1, .ttq-warehouse h2 {
+  margin: 10px 0;
+}
+
+.ttq-warehouse input, .ttq-warehouse select, .ttq-warehouse textarea {
+  border: 1px solid #cfd7e3;
+  border-radius: 12px;
+  padding: 10px 12px;
+  outline: none;
+  background: #fff;
+}
+
+.ttq-warehouse button {
+  border-radius: 12px;
+}
+
+/* responsive */
+@media (max-width: 1100px) {
+  .ttq-dash-body { flex-direction: column; }
+  .ttq-grid { grid-template-columns: repeat(2, 1fr); }
+  .ttq-sidebar { width: 100%; }
+
+  .ttq-materials-grid { grid-template-columns: 1fr; }
+  .ttq-grid2 { grid-template-columns: 1fr; }
+}
+/* ===== TTQ DASHBOARD PRO ADD-ON (paste at bottom) ===== */
+
+/* menu title row with icon */
+.ttq-menu-titleRow{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+
+.ttq-menu-icon{
+  width:28px;
+  height:28px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border-radius:10px;
+  background:#f1f5ff;
+  border:1px solid #dbeafe;
+  font-size:14px;
+}
+
+.ttq-menu-arrow{
+  margin-left:auto;
+  color:#1d4ed8;
+  font-weight:900;
+}
+
+/* hero card */
+.ttq-heroCard{
+  background: linear-gradient(180deg,#ffffff 0%, #fbfdff 100%);
+  border:1px solid #e6eefc;
+  border-radius:16px;
+  padding:16px;
+  box-shadow:0 10px 26px rgba(15,23,42,.06);
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:14px;
+  margin-bottom:14px;
+}
+
+.ttq-heroTitle{
+  font-size:22px;
+  font-weight:900;
+  color:#0f172a;
+}
+
+.ttq-heroSub{
+  margin-top:6px;
+  font-size:13px;
+  color:#64748b;
+  line-height:1.5;
+}
+
+.ttq-heroRight{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+}
+
+.ttq-miniStat{
+  min-width:170px;
+  background:#f8fbff;
+  border:1px solid #e6eefc;
+  border-radius:14px;
+  padding:10px 12px;
+}
+
+.ttq-miniStatTop{
+  font-size:12px;
+  color:#64748b;
+  font-weight:900;
+}
+
+.ttq-miniStatVal{
+  margin-top:6px;
+  font-weight:900;
+  color:#0f172a;
+}
+
+/* action card top */
+.ttq-action-top{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin-bottom:10px;
+}
+
+.ttq-action-icon{
+  width:38px;
+  height:38px;
+  border-radius:14px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:#f1f5ff;
+  border:1px solid #dbeafe;
+  font-size:16px;
+}
+
+.ttq-action-card.primary .ttq-action-icon{
+  background: rgba(255,255,255,.16);
+  border-color: rgba(255,255,255,.24);
+}
+
+.ttq-badgeSoft{
+  font-size:12px;
+  font-weight:900;
+  padding:6px 10px;
+  border-radius:999px;
+  background: rgba(29,78,216,.10);
+  color:#1d4ed8;
+  border:1px solid #dbeafe;
+}
+
+.ttq-action-card.primary .ttq-badgeSoft{
+  background: rgba(255,255,255,.16);
+  border-color: rgba(255,255,255,.24);
+  color:#fff;
+}
+
+/* second grid panels */
+.ttq-grid2pro{
+  display:grid;
+  grid-template-columns: repeat(3, minmax(0,1fr));
+  gap:12px;
+  margin-bottom:14px;
+}
+
+.ttq-panel{
+  background:#fff;
+  border:1px solid #e6eefc;
+  border-radius:16px;
+  padding:14px;
+  box-shadow:0 10px 26px rgba(15,23,42,.06);
+}
+
+.ttq-panelTitle{
+  font-weight:900;
+  color:#0f172a;
+  font-size:14px;
+}
+
+.ttq-panelDesc{
+  margin-top:6px;
+  font-size:12px;
+  color:#64748b;
+  line-height:1.45;
+  min-height:34px;
+}
+
+.ttq-panelActions{
+  margin-top:12px;
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.ttq-btnLink{
+  text-decoration:none;
+  background:#2563eb;
+  border:1px solid #2563eb;
+  color:#fff;
+  font-weight:900;
+  padding:10px 12px;
+  border-radius:12px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+}
+
+.ttq-btnLink.ghost{
+  background:#fff;
+  border:1px solid #dbeafe;
+  color:#1d4ed8;
+}
+
+/* responsive */
+@media (max-width: 1100px){
+  .ttq-grid2pro{ grid-template-columns: 1fr; }
+  .ttq-miniStat{ min-width: 160px; }
+}
+.ttq-slimbar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:10px 16px;
+  background:#fff;
+  border:1px solid #e5e7eb;
+  border-radius:14px;
+}
+
+.ttq-slimbar-left{display:flex; align-items:center; gap:10px;}
+.ttq-slimbar-logo{width:28px; height:28px; object-fit:contain;}
+
+.ttq-slimbar-title{font-weight:800; font-size:14px; line-height:1.1;}
+.ttq-slimbar-sub{font-size:12px; color:#6b7280; margin-top:2px;}
+
+.ttq-slimbar-right{display:flex; align-items:center; gap:10px;}
+
+.ttq-slimbar-btn{
+  background:#fff;
+  border:1px solid #d1d5db;
+  padding:8px 12px;
+  border-radius:999px;
+  cursor:pointer;
+  font-weight:600;
+}
+.ttq-slimbar-btn:hover{background:#f9fafb;}

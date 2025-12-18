@@ -1,0 +1,37 @@
+/* src/styles/invoicePrint.css */
+@media print {
+  body {
+    background: #fff !important;
+  }
+
+  /* Ẩn tất cả */
+  body * {
+    visibility: hidden !important;
+  }
+
+  /* Chỉ hiện vùng in */
+  #print-area,
+  #print-area * {
+    visibility: visible !important;
+  }
+
+  #print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 210mm;
+    min-height: 297mm;
+    padding: 12mm;
+    background: #fff;
+  }
+
+  /* không in nút */
+  .no-print {
+    display: none !important;
+  }
+
+  @page {
+    size: A4;
+    margin: 0;
+  }
+}
