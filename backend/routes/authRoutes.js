@@ -10,29 +10,22 @@ const router = express.Router();
  * - Chữ cái đầu viết HOA
  * - Tối thiểu 6 ký tự
  * - Có ít nhất 1 ký tự đặc biệt
- *
- * Nếu bạn muốn rule mạnh hơn (>=8 + có số), xem phần OPTION bên dưới.
  */
 const validatePassword = (password) => {
   const regex = /^[A-Z](?=.*[^A-Za-z0-9]).{5,}$/;
   return regex.test(password);
 };
 
-// OPTION: rule mạnh hơn (>=8, có số và ký tự đặc biệt, chữ đầu HOA)
-// const validatePassword = (password) => {
-//   const regex = /^(?=.*[0-9])(?=.*[!@#$%^&*])[A-Z][A-Za-z0-9!@#$%^&*]{7,}$/;
-//   return regex.test(password);
-// };
-
 /* ================= REGISTER ================= */
 router.post("/register", async (req, res) => {
   try {
-    const { username, email, password, role } = req.body;
+    // ⚠️ CÁCH 1: không nhận role từ client nữa (tránh tự nâng quyền)
+    const { username, email, password } = req.body;
 
     const u = (username || "").trim();
     const e = (email || "").trim();
 
-    console.log("✅ REGISTER BODY =", { username: u, email: e ? "***" : "", role });
+    console.log("✅ REGISTER BODY =", { username: u, email: e ? "***" : "" });
 
     if (!u || !password) {
       return res.status(400).json({ message: "Thiếu username hoặc password" });
@@ -56,7 +49,8 @@ router.post("/register", async (req, res) => {
       username: u,
       email: e || undefined,
       passwordHash,
-      role: role || "user",
+      // ✅ CÁCH 1: mặc định admin cho mọi tài khoản đăng ký mới
+      role: "admin",
     });
 
     return res.status(201).json({
@@ -106,9 +100,17 @@ router.post("/login", async (req, res) => {
       return res.status(401).json({ message: "Sai tài khoản hoặc mật khẩu" });
     }
 
+    // ✅ BẮT BUỘC có JWT_SECRET để khỏi lệch môi trường
+    if (!process.env.JWT_SECRET) {
+      return res
+        .status(500)
+        .json({ message: "Thiếu JWT_SECRET trong file backend/.env" });
+    }
+
+    // ✅ Chuẩn hóa payload: dùng userId (đa số middleware lọc owner dùng userId)
     const token = jwt.sign(
-      { id: user._id, username: user.username, role: user.role },
-      process.env.JWT_SECRET || "dev_secret",
+      { userId: user._id, username: user.username, role: user.role },
+      process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 

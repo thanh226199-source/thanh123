@@ -1,44 +1,75 @@
 // src/api/authApi.js
 import axiosClient from "./axiosClient";
+import { getToken, setAuth, clearAuth } from "./tokenStore";
 
-const TOKEN_KEY = "token";
+export { getToken, setAuth, clearAuth };
 
-export const getToken = () => localStorage.getItem(TOKEN_KEY) || "";
+/**
+ * Request wrapper - an toàn tuyệt đối (không bao giờ rơi vào axiosClient({...}) => tránh lỗi apply)
+ */
+export const request = async ({
+  method = "GET",
+  url,
+  data = null,
+  params = null,
+} = {}) => {
+  if (!url) throw new Error("request: url is required");
 
-export const setAuth = (t) => {
-  if (t) localStorage.setItem(TOKEN_KEY, t);
-  else localStorage.removeItem(TOKEN_KEY);
+  const m = String(method || "GET").trim().toUpperCase();
+
+  switch (m) {
+    case "GET":
+      return axiosClient.get(url, params ? { params } : undefined);
+
+    case "POST":
+      return axiosClient.post(url, data);
+
+    case "PUT":
+      return axiosClient.put(url, data);
+
+    case "DELETE":
+      return axiosClient.delete(url, params ? { params } : undefined);
+
+    default:
+      throw new Error(`request: HTTP method không hợp lệ: ${method}`);
+  }
 };
 
-export const clearAuth = () => setAuth("");
-
-// ✅ EXPORT request để các file customerApi/materialApi không bị vỡ import
-// axiosClient của bạn đã tự gắn token + chống cache + xử lý 401
-export const request = async ({ method = "GET", url, data, params }) => {
-  const m = String(method || "GET").toLowerCase();
-
-  if (m === "get") return axiosClient.get(url, { params });
-  if (m === "post") return axiosClient.post(url, data);
-  if (m === "put") return axiosClient.put(url, data);
-  if (m === "delete") return axiosClient.delete(url, { params });
-
-  // fallback
-  return axiosClient({ method, url, data, params });
-};
-
+/**
+ * Login - tự bắt nhiều kiểu backend trả về token
+ */
 export const login = async ({ username, password }) => {
-  const data = await axiosClient.post("/auth/login", { username, password });
+  if (!username || !password) {
+    throw new Error("login: username/password is required");
+  }
 
-  const token = data?.token || data?.accessToken || data?.data?.token;
-  if (!token) throw new Error("Login không trả token. Kiểm tra Response /auth/login.");
+  const res = await axiosClient.post("/auth/login", { username, password });
+
+  // hỗ trợ nhiều format: {token}, {accessToken}, {data:{token}}, {data:{accessToken}}
+  const token =
+    res?.token ||
+    res?.accessToken ||
+    res?.data?.token ||
+    res?.data?.accessToken;
+
+  if (!token) {
+    // để debug nhanh
+    console.error("Login response:", res);
+    throw new Error("Login không trả token. Kiểm tra API /auth/login response.");
+  }
+
   setAuth(token);
-
-  return data;
+  return res;
 };
 
-export const register = (payload) => axiosClient.post("/auth/register", payload);
+export const register = async (payload) => {
+  if (!payload) throw new Error("register: payload is required");
+  return axiosClient.post("/auth/register", payload);
+};
 
-export const logout = async () => {
+export const logout = () => {
   clearAuth();
-  window.location.href = "/login";
+  // ✅ để SPA điều hướng nhẹ nhàng hơn (nếu bạn dùng react-router)
+  // Nếu bạn không dùng navigate ở đây thì cứ redirect như cũ:
+  window.location.assign("/login");
 };

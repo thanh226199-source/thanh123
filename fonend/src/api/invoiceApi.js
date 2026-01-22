@@ -1,24 +1,33 @@
 // src/api/invoiceApi.js
-import request from "./axiosClient";
+import axiosClient from "./axiosClient";
 
-// Tạo hóa đơn
 export const createInvoice = (payload) => {
-  // backend thường là POST /invoices
-  return request.post("/invoices", payload);
+  if (!payload) throw new Error("createInvoice: payload is required");
+  return axiosClient.post("/invoices", payload);
 };
 
-// Lấy danh sách hóa đơn
 export const getInvoices = (params = {}) => {
-  // backend thường là GET /invoices
-  return request.get("/invoices", { params });
+  return axiosClient.get("/invoices", { params });
 };
 
-// Lấy chi tiết hóa đơn (nếu cần)
 export const getInvoiceById = (id) => {
-  return request.get(`/invoices/${id}`);
+  if (!id) throw new Error("getInvoiceById: id is required");
+  return axiosClient.get(`/invoices/${encodeURIComponent(id)}`);
 };
 
-// Xoá hóa đơn (nếu có)
 export const deleteInvoice = (id) => {
-  return request.delete(`/invoices/${id}`);
+  if (!id) throw new Error("deleteInvoice: id is required");
+  return axiosClient.delete(`/invoices/${encodeURIComponent(id)}`);
+};
+
+// (optional) nếu sau này bạn cần sửa hoá đơn
+export const updateInvoice = (id, payload) => {
+  if (!id) throw new Error("updateInvoice: id is required");
+  if (!payload) throw new Error("updateInvoice: payload is required");
+  return axiosClient.put(`/invoices/${encodeURIComponent(id)}`, payload);
+};
+// LẤY HOÁ ĐƠN THEO SỐ HOÁ ĐƠN (CHO QR)
+export const getInvoiceByNo = (invoiceNo) => {
+  if (!invoiceNo) throw new Error("invoiceNo is required");
+  return axiosClient.get(`/invoices/by-no/${encodeURIComponent(invoiceNo)}`);
 };

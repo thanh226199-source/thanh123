@@ -6,7 +6,7 @@ module.exports = {
   tiers: [
     {
       key: "SILVER",
-      name: "Đồng (Silver)",
+      name: "Đồng (Copper)", // ✅ sửa Silver -> Copper
       minPoints: 0,
       maxPoints: 999,
       discountRate: 0,
@@ -16,7 +16,7 @@ module.exports = {
     },
     {
       key: "GOLD",
-      name: "Bạc (Gold)",
+      name: "Bạc (Silver)", // ✅ sửa Gold -> Silver
       minPoints: 1000,
       maxPoints: 4999,
       discountRate: 0.05,
@@ -26,7 +26,7 @@ module.exports = {
     },
     {
       key: "PLATINUM",
-      name: "Vàng (Platinum)",
+      name: "Vàng (Gold)", // ✅ sửa Platinum -> Gold
       minPoints: 5000,
       maxPoints: 9999,
       discountRate: 0.07,
@@ -36,20 +36,17 @@ module.exports = {
     },
     {
       key: "DIAMOND",
-      name: "Kim cương (Diamond)",
+      name: "Kim cương (Diamond)", // ✅ đúng sẵn
       minPoints: 10000,
       maxPoints: 999999999,
       discountRate: 0.10,
       bonusRate: 0.30, // +30%
-      benefits: ["Giảm 10% tổng hoá đơn (đơn ≥ 100.000)", "Tích điểm +30%", "Ưu tiên khuyến mãi/quà sinh nhật"],
+      benefits: [
+        "Giảm 10% tổng hoá đơn (đơn ≥ 100.000)",
+        "Tích điểm +30%",
+        "Ưu tiên khuyến mãi/quà sinh nhật",
+      ],
       example: { bill: 500000 },
     },
   ],
 };
-
-// Gợi ý công thức (để FE hiển thị):
-// discount = bill * discountRate (nếu bill >= minBillToApply)
-// billAfter = bill - discount
-// pointsBase = floor(billAfter / vndPerPoint)
-// pointsEarned = floor(pointsBase * (1 + bonusRate))
-// Rank lên theo totalPoints (cộng dồn, không reset)

@@ -1,4 +1,3 @@
-// src/App.js
 import React from "react";
 import "./App.css";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
@@ -22,7 +21,8 @@ import CreateEmployeePage from "./pages/CreateEmployeePage";
 // invoices
 import InvoicesPage from "./pages/InvoicesPage";
 import InvoiceCreatePage from "./pages/InvoiceCreatePage";
-import InvoicePreviewPage from "./pages/InvoicePreviewPage";
+import InvoiceDetailPage from "./pages/InvoiceDetailPage";
+import InvoicePublicViewPage from "./pages/InvoicePublicViewPage"; // ✅ view public by QR
 
 // loyalty
 import LoyalCustomersPage from "./pages/LoyalCustomersPage";
@@ -114,11 +114,16 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+
+        {/* ✅ PUBLIC VIEW (QR) */}
+        <Route path="/invoices/view/:invoiceNo" element={<InvoicePublicViewPage />} />
+
+        {/* ✅ detail (internal) */}
         <Route
-          path="/invoices/:id/preview"
+          path="/invoices/:id"
           element={
             <ProtectedRoute>
-              <InvoicePreviewPage />
+              <InvoiceDetailPage />
             </ProtectedRoute>
           }
         />

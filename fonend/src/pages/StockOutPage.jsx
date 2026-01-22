@@ -1,3 +1,4 @@
+// src/pages/StockOutPage.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import TTQLogo from "../assets/ttq-logo.png";
@@ -5,13 +6,28 @@ import TTQLogo from "../assets/ttq-logo.png";
 import { getMaterials } from "../api/materialApi";
 import { createStockOut, getStockOutHistory } from "../api/stockApi";
 
+/** Helpers */
+const money = (n) => Number(n || 0).toLocaleString("vi-VN");
+
+// normalize history response
+const hsToArray = (hs) => {
+  if (Array.isArray(hs)) return hs;
+  if (hs && Array.isArray(hs.data)) return hs.data;
+  if (hs && Array.isArray(hs.items)) return hs.items;
+  return [];
+};
+
+// lấy tồn / giá bán / label theo nhiều kiểu field
+const pickStock = (m) => Number(m?.soLuongTon ?? m?.stock ?? m?.quantity ?? 0);
+const pickSellPrice = (m) => Number(m?.giaBan ?? m?.sellPrice ?? 0);
+
 export default function StockOutPage() {
   const navigate = useNavigate();
 
   const [materials, setMaterials] = useState([]);
   const [history, setHistory] = useState([]);
 
-  // ✅ NEW: mở/đóng chi tiết phiếu trong lịch sử
+  // mở/đóng chi tiết phiếu
   const [openId, setOpenId] = useState(null);
 
   // form header
@@ -20,8 +36,12 @@ export default function StockOutPage() {
 
   // dòng đang chọn để add
   const [materialId, setMaterialId] = useState("");
-  const [qty, setQty] = useState(1);
-  const [unitPrice, setUnitPrice] = useState("");
+
+  // ✅ qty dạng string để xoá được "0" đầu, không bị ép về 0
+  const [qty, setQty] = useState("1");
+
+  // ✅ giá xuất bị khoá, chỉ lấy từ kho (giaBan)
+  const [unitPrice, setUnitPrice] = useState(0);
 
   // items trong phiếu
   const [items, setItems] = useState([]);
@@ -36,31 +56,21 @@ export default function StockOutPage() {
   }, []);
 
   const selected = useMemo(
-    () => materials.find((m) => m._id === materialId),
+    () => materials.find((m) => String(m._id) === String(materialId)),
     [materials, materialId]
   );
 
   const fetchAll = async () => {
     const ms = await getMaterials();
-    setMaterials(Array.isArray(ms) ? ms : []);
+    setMaterials(Array.isArray(ms) ? ms : Array.isArray(ms?.data) ? ms.data : []);
     const his = await getStockOutHistory();
-    setHistory(Array.isArray(his) ? hsToArray(his) : []);
-  };
-
-  // ✅ helper: phòng khi API trả về {data: []} hoặc []
-  const hsToArray = (hs) => {
-    if (Array.isArray(hs)) return hs;
-    if (hs && Array.isArray(hs.data)) return hs.data;
-    return [];
+    setHistory(hsToArray(his));
   };
 
   useEffect(() => {
     (async () => {
       try {
-        const ms = await getMaterials();
-        setMaterials(Array.isArray(ms) ? ms : []);
-        const his = await getStockOutHistory();
-        setHistory(hsToArray(his));
+        await fetchAll();
       } catch (e) {
         localStorage.removeItem("token");
         localStorage.removeItem("user");
@@ -70,62 +80,87 @@ export default function StockOutPage() {
     // eslint-disable-next-line
   }, []);
 
+  // ✅ khi chọn vật liệu -> tự lấy giá bán từ kho và set vào unitPrice
+  useEffect(() => {
+    if (!selected) return;
+    setUnitPrice(pickSellPrice(selected));
+  }, [selected]);
+
   const addItem = () => {
     if (!materialId) return alert("Chọn vật liệu trước");
-    const q = Number(qty);
-    if (!q || q <= 0) return alert("Số lượng phải > 0");
 
-    const p = unitPrice === "" ? 0 : Number(unitPrice);
-    if (p < 0 || Number.isNaN(p)) return alert("Giá xuất không hợp lệ");
+    const qNum = Number(qty || 0);
+    if (!Number.isFinite(qNum) || qNum <= 0) return alert("Số lượng phải > 0");
 
     const m = selected;
     if (!m) return alert("Vật liệu không tồn tại");
 
-    // ✅ nếu đã có dòng cùng material -> cộng dồn
+    const ton = pickStock(m);
+    if (qNum > ton) return alert(`Không đủ tồn kho: ${m.tenVatLieu} (tồn: ${ton})`);
+
+    const price = pickSellPrice(m); // ✅ giá xuất = giá bán kho
+
+    // ✅ nếu đã có dòng cùng material -> cộng dồn (và vẫn giữ giá kho)
     setItems((prev) => {
-      const idx = prev.findIndex((x) => x.material === materialId);
+      const idx = prev.findIndex((x) => String(x.material) === String(materialId));
       if (idx >= 0) {
         const clone = [...prev];
+        const newQty = Number(clone[idx].soLuong || 0) + qNum;
+
+        if (newQty > ton) {
+          alert(`Không đủ tồn kho: ${m.tenVatLieu} (tồn: ${ton})`);
+          return prev;
+        }
+
         clone[idx] = {
           ...clone[idx],
-          soLuong: Number(clone[idx].soLuong) + q,
-          giaXuat: p, // cập nhật giá mới nhất (tuỳ bạn)
-          tonHienTai: Number(m.soLuongTon || clone[idx].tonHienTai || 0),
+          soLuong: newQty,
+          giaXuat: price,
+          tonHienTai: ton,
         };
         return clone;
       }
+
       return [
         ...prev,
         {
           material: materialId,
           maVatLieu: m.maVatLieu,
           tenVatLieu: m.tenVatLieu,
-          soLuong: q,
-          giaXuat: p,
-          tonHienTai: Number(m.soLuongTon || 0),
+          donViTinh: m.donViTinh,
+          soLuong: qNum,
+          giaXuat: price,
+          tonHienTai: ton,
         },
       ];
     });
 
     // reset dòng
     setMaterialId("");
-    setQty(1);
-    setUnitPrice("");
+    setQty("1");
+    setUnitPrice(0);
   };
 
   const removeItem = (material) => {
-    setItems((prev) => prev.filter((x) => x.material !== material));
+    setItems((prev) => prev.filter((x) => String(x.material) !== String(material)));
   };
 
+  // ✅ update qty (vẫn validate tồn)
   const updateItemQty = (material, newQty) => {
-    const q = Number(newQty);
-    if (!q || q <= 0) return;
+    const qNum = Number(newQty || 0);
+    if (!Number.isFinite(qNum) || qNum <= 0) return;
+
     setItems((prev) =>
-      prev.map((x) => (x.material === material ? { ...x, soLuong: q } : x))
+      prev.map((x) => {
+        if (String(x.material) !== String(material)) return x;
+
+        const ton = Number(x.tonHienTai || 0);
+        if (qNum > ton) return { ...x, soLuong: qNum }; // vẫn cho nhập để cảnh báo đỏ
+        return { ...x, soLuong: qNum };
+      })
     );
   };
 
-  // ✅ NEW: xoá danh sách có confirm
   const clearItems = () => {
     if (!items.length) return;
     if (!window.confirm("Bạn muốn xoá toàn bộ danh sách trong phiếu xuất?")) return;
@@ -136,34 +171,33 @@ export default function StockOutPage() {
     e.preventDefault();
     if (!items.length) return alert("Phiếu xuất phải có ít nhất 1 dòng vật liệu");
 
+    // ✅ chặn vượt tồn
+    const over = items.find((it) => Number(it.soLuong || 0) > Number(it.tonHienTai || 0));
+    if (over) {
+      return alert(`Có dòng vượt tồn: ${over.tenVatLieu} (tồn: ${over.tonHienTai})`);
+    }
+
     setLoading(true);
     try {
       await createStockOut({
-        partner,
-        note,
+        partner: partner?.trim() || "",
+        note: note?.trim() || "",
         createdBy: user?.username || "",
         items: items.map((i) => ({
           material: i.material,
           soLuong: Number(i.soLuong),
-          // ✅ backend của bạn đang dùng giaBan hoặc giaXuat tuỳ phiên bản.
-          // Nếu backend route đang đọc "giaBan", hãy đổi key ở đây thành "giaBan".
+          // ✅ backend nhận giaXuat (hoặc bạn đổi sang giaBan nếu route yêu cầu)
           giaXuat: Number(i.giaXuat || 0),
         })),
       });
 
-      alert("Tạo phiếu xuất thành công!");
+      alert("✅ Tạo phiếu xuất thành công!");
       setPartner("");
       setNote("");
       setItems([]);
       setOpenId(null);
 
-      // reload
-      const his = await getStockOutHistory();
-      setHistory(hsToArray(his));
-
-      // reload tồn kho để dropdown cập nhật tồn
-      const ms = await getMaterials();
-      setMaterials(Array.isArray(ms) ? ms : []);
+      await fetchAll();
     } catch (err) {
       alert(err?.response?.data?.message || "Xuất kho thất bại");
     } finally {
@@ -202,12 +236,12 @@ export default function StockOutPage() {
               <div>
                 <div className="ttq-card-title">Tạo phiếu xuất kho</div>
                 <div className="ttq-card-sub">
-                  Thêm nhiều dòng vật liệu vào 1 phiếu, hệ thống sẽ trừ tồn.
+                  Thêm nhiều dòng vật liệu vào 1 phiếu, hệ thống sẽ trừ tồn. (Giá xuất lấy từ kho, không sửa)
                 </div>
               </div>
 
               <span className="ttq-badge">
-                Items: {items.length} • SL: {totalQty} • Tổng: {totalMoney}
+                Items: {items.length} • SL: {totalQty} • Tổng: {money(totalMoney)}
               </span>
             </div>
 
@@ -224,7 +258,7 @@ export default function StockOutPage() {
                     <option value="">-- Chọn vật liệu --</option>
                     {materials.map((m) => (
                       <option key={m._id} value={m._id}>
-                        {m.maVatLieu} - {m.tenVatLieu} (Tồn: {m.soLuongTon || 0})
+                        {m.maVatLieu} - {m.tenVatLieu} (Tồn: {pickStock(m)})
                       </option>
                     ))}
                   </select>
@@ -234,20 +268,27 @@ export default function StockOutPage() {
                   <label className="ttq-label2">Số lượng</label>
                   <input
                     className="ttq-input2"
-                    type="number"
-                    min="1"
+                    type="text"
+                    inputMode="numeric"
                     value={qty}
-                    onChange={(e) => setQty(e.target.value)}
+                    onChange={(e) => setQty(e.target.value.replace(/[^\d]/g, ""))}
+                    onBlur={() => {
+                      const n = Number(qty || 0);
+                      setQty(String(n > 0 ? n : 1));
+                    }}
+                    placeholder="1"
                   />
                 </div>
 
                 <div>
-                  <label className="ttq-label2">Giá xuất</label>
+                  <label className="ttq-label2">Giá xuất (lấy từ kho)</label>
                   <input
                     className="ttq-input2"
                     value={unitPrice}
-                    onChange={(e) => setUnitPrice(e.target.value)}
-                    placeholder="VD: 35000"
+                    disabled
+                    readOnly
+                    style={{ background: "#f1f5f9", cursor: "not-allowed" }}
+                    placeholder="Tự lấy theo vật liệu"
                   />
                 </div>
               </div>
@@ -299,16 +340,20 @@ export default function StockOutPage() {
                                 <input
                                   style={{ width: 80 }}
                                   className="ttq-input2"
-                                  type="number"
-                                  min="1"
-                                  value={it.soLuong}
-                                  onChange={(e) => updateItemQty(it.material, e.target.value)}
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={String(it.soLuong)}
+                                  onChange={(e) => updateItemQty(it.material, e.target.value.replace(/[^\d]/g, ""))}
+                                  onBlur={(e) => {
+                                    const n = Number(e.target.value || 0);
+                                    if (n > 0) updateItemQty(it.material, String(n));
+                                  }}
                                 />
                               </td>
 
-                              <td className="ttq-right">{it.giaXuat || 0}</td>
+                              <td className="ttq-right">{money(it.giaXuat || 0)}</td>
                               <td className="ttq-right ttq-strong">
-                                {Number(it.soLuong || 0) * Number(it.giaXuat || 0)}
+                                {money(Number(it.soLuong || 0) * Number(it.giaXuat || 0))}
                               </td>
 
                               <td className="ttq-center">
@@ -326,7 +371,6 @@ export default function StockOutPage() {
                       </tbody>
                     </table>
 
-                    {/* ✅ cảnh báo nếu có dòng vượt tồn */}
                     {items.some((it) => Number(it.soLuong || 0) > Number(it.tonHienTai || 0)) ? (
                       <div style={{ padding: 10, fontSize: 12, color: "#b00020" }}>
                         ⚠ Có dòng vượt tồn kho. Hệ thống sẽ báo lỗi khi tạo phiếu.
@@ -403,16 +447,14 @@ export default function StockOutPage() {
                       const isOpen = openId === h._id;
                       const totalAmount = (h.items || []).reduce(
                         (sum, it) =>
-                          sum +
-                          Number(it.soLuong || 0) *
-                            Number(it.giaXuat ?? it.giaBan ?? 0),
+                          sum + Number(it.soLuong || 0) * Number(it.giaXuat ?? it.giaBan ?? 0),
                         0
                       );
 
                       return (
                         <React.Fragment key={h._id}>
                           <tr>
-                            <td>{h.createdAt ? new Date(h.createdAt).toLocaleString() : "-"}</td>
+                            <td>{h.createdAt ? new Date(h.createdAt).toLocaleString("vi-VN") : "-"}</td>
                             <td title={h.partner || ""}>{h.partner || "-"}</td>
                             <td className="ttq-right ttq-strong">{h.items?.length || 0}</td>
                             <td>{h.createdBy || "-"}</td>
@@ -442,7 +484,7 @@ export default function StockOutPage() {
                                       Chi tiết vật liệu ({h.items?.length || 0} dòng)
                                     </div>
                                     <div style={{ fontWeight: 900 }}>
-                                      Tổng tiền: {totalAmount}
+                                      Tổng tiền: {money(totalAmount)}
                                     </div>
                                   </div>
 
@@ -462,13 +504,11 @@ export default function StockOutPage() {
                                         return (
                                           <tr key={idx}>
                                             <td className="ttq-mono">{it.maVatLieu || "-"}</td>
-                                            <td title={it.tenVatLieu || ""}>
-                                              {it.tenVatLieu || "-"}
-                                            </td>
+                                            <td title={it.tenVatLieu || ""}>{it.tenVatLieu || "-"}</td>
                                             <td className="ttq-right ttq-strong">{it.soLuong}</td>
-                                            <td className="ttq-right">{price}</td>
+                                            <td className="ttq-right">{money(price)}</td>
                                             <td className="ttq-right ttq-strong">
-                                              {Number(it.soLuong || 0) * price}
+                                              {money(Number(it.soLuong || 0) * price)}
                                             </td>
                                           </tr>
                                         );

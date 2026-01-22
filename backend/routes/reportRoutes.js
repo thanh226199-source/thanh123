@@ -1,6 +1,7 @@
 // backend/routes/reportRoutes.js
 const express = require("express");
 const ExcelJS = require("exceljs");
+const mongoose = require("mongoose");
 
 const Invoice = require("../models/Invoice");
 const Material = require("../models/Material");
@@ -21,13 +22,14 @@ const authMiddleware =
     ? authModule
     : authModule?.authMiddleware || authModule?.verifyToken;
 
-const adminModule = require("../middleware/requireAdmin");
-const requireAdmin =
-  typeof adminModule === "function" ? adminModule : adminModule?.requireAdmin;
-
+// router
 const router = express.Router();
 
 // ===== helper =====
+const getUserId = (req) => req.user?.userId || req.user?.id || req.user?._id;
+const getUsername = (req) => req.user?.username || "";
+
+// parse date range
 function parseDateRange(from, to) {
   const fromDate = from ? new Date(from + "T00:00:00.000Z") : null;
   const toDate = to ? new Date(to + "T23:59:59.999Z") : null;
@@ -49,8 +51,41 @@ function money(n) {
 
 function calcStockInDocCost(doc) {
   const items = Array.isArray(doc.items) ? doc.items : [];
-  // ✅ StockIn của bạn có soLuong + giaNhap => chi phí = Σ soLuong*giaNhap
-  return items.reduce((s, it) => s + money(it.soLuong) * money(it.giaNhap), 0);
+  return items.reduce(
+    (s, it) =>
+      s +
+      money(it.soLuong ?? it.qty ?? it.quantity) *
+        money(it.giaNhap ?? it.importPrice ?? it.price),
+    0
+  );
+}
+
+// build query theo owner cho Invoice/Material
+function buildOwnerQuery(req, extra = {}) {
+  const userId = getUserId(req);
+  if (!userId) return { error: "Unauthorized" };
+  return { ...extra, owner: userId };
+}
+
+// build query cho StockIn: ưu tiên owner nếu có, fallback theo createdBy
+function buildStockInOwnerQuery(req) {
+  const userId = getUserId(req);
+  const username = getUsername(req);
+  if (!userId) return { error: "Unauthorized" };
+
+  const createdByPath = StockIn?.schema?.path?.("createdBy");
+  const createdByInstance = createdByPath?.instance; // "String" | "ObjectId" | undefined
+
+  const orConds = [{ owner: userId }, { createdByUser: userId }];
+
+  if (createdByInstance === "ObjectId") {
+    orConds.push({ createdBy: userId });
+  } else {
+    orConds.push({ createdBy: String(userId) });
+    if (username) orConds.push({ createdBy: username });
+  }
+
+  return { $or: orConds };
 }
 
 // =====================================================
@@ -59,28 +94,54 @@ function calcStockInDocCost(doc) {
 // =====================================================
 router.get("/summary", authMiddleware, async (req, res) => {
   try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
     const { from, to } = req.query;
     const range = parseDateRange(from, to);
     if (range.error) return res.status(400).json({ message: range.error });
 
-    const invoiceQuery = range.createdAt && Object.keys(range.createdAt).length
-      ? { createdAt: range.createdAt }
-      : {};
+    const invoiceQuery = buildOwnerQuery(
+      req,
+      range.createdAt && Object.keys(range.createdAt).length
+        ? { createdAt: range.createdAt }
+        : {}
+    );
+    if (invoiceQuery.error)
+      return res.status(401).json({ message: invoiceQuery.error });
 
-    // doanh thu từ invoice
+    // doanh thu từ invoice (chỉ owner)
     const invoices = await Invoice.find(invoiceQuery).select(
       "total totalAfterDiscount discountAmount createdAt invoiceNo staffName customerName"
     );
 
-    const revenue = invoices.reduce((s, x) => s + money(x.totalAfterDiscount ?? x.total), 0);
+    const revenue = invoices.reduce(
+      (s, x) => s + money(x.totalAfterDiscount ?? x.total),
+      0
+    );
 
-    // chi phí nhập kho
+    // chi phí nhập kho (chỉ owner)
     let importsTotalCost = 0;
     let stockIns = [];
     if (StockIn) {
-      const stockInQuery = invoiceQuery; // cùng range
-      stockIns = await StockIn.find(stockInQuery).select("createdAt partner note items");
-      importsTotalCost = stockIns.reduce((sum, doc) => sum + calcStockInDocCost(doc), 0);
+      const stockInQueryBase =
+        range.createdAt && Object.keys(range.createdAt).length
+          ? { createdAt: range.createdAt }
+          : {};
+
+      const stockInOwner = buildStockInOwnerQuery(req);
+      if (stockInOwner.error)
+        return res.status(401).json({ message: stockInOwner.error });
+
+      const stockInQuery = { ...stockInQueryBase, ...stockInOwner };
+
+      stockIns = await StockIn.find(stockInQuery).select(
+        "createdAt partner note items createdBy owner"
+      );
+      importsTotalCost = stockIns.reduce(
+        (sum, doc) => sum + calcStockInDocCost(doc),
+        0
+      );
     }
 
     const profit = revenue - importsTotalCost;
@@ -105,22 +166,48 @@ router.get("/summary", authMiddleware, async (req, res) => {
 // =====================================================
 router.get("/summary/export", authMiddleware, async (req, res) => {
   try {
-    const { from, to } = req.query;
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
+    const { from, to } = req.query;
     const range = parseDateRange(from, to);
     if (range.error) return res.status(400).json({ message: range.error });
 
-    const q = range.createdAt && Object.keys(range.createdAt).length
-      ? { createdAt: range.createdAt }
-      : {};
+    const q = buildOwnerQuery(
+      req,
+      range.createdAt && Object.keys(range.createdAt).length
+        ? { createdAt: range.createdAt }
+        : {}
+    );
+    if (q.error) return res.status(401).json({ message: q.error });
 
-    const invoices = await Invoice.find(q).select("total totalAfterDiscount createdAt invoiceNo");
-    const revenue = invoices.reduce((s, x) => s + money(x.totalAfterDiscount ?? x.total), 0);
+    const invoices = await Invoice.find(q).select(
+      "total totalAfterDiscount createdAt invoiceNo"
+    );
+    const revenue = invoices.reduce(
+      (s, x) => s + money(x.totalAfterDiscount ?? x.total),
+      0
+    );
 
     let importsTotalCost = 0;
     if (StockIn) {
-      const stockIns = await StockIn.find(q).select("items createdAt");
-      importsTotalCost = stockIns.reduce((sum, doc) => sum + calcStockInDocCost(doc), 0);
+      const stockInQueryBase =
+        range.createdAt && Object.keys(range.createdAt).length
+          ? { createdAt: range.createdAt }
+          : {};
+
+      const stockInOwner = buildStockInOwnerQuery(req);
+      if (stockInOwner.error)
+        return res.status(401).json({ message: stockInOwner.error });
+
+      const stockIns = await StockIn.find({
+        ...stockInQueryBase,
+        ...stockInOwner,
+      }).select("items createdAt");
+      importsTotalCost = stockIns.reduce(
+        (sum, doc) => sum + calcStockInDocCost(doc),
+        0
+      );
     }
 
     const profit = revenue - importsTotalCost;
@@ -139,8 +226,14 @@ router.get("/summary/export", authMiddleware, async (req, res) => {
 
     ws.columns = [{ width: 20 }, { width: 30 }];
 
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="BaoCaoTongHop_${from || "ALL"}_${to || "ALL"}.xlsx"`);
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="BaoCaoTongHop_${from || "ALL"}_${to || "ALL"}.xlsx"`
+    );
 
     await wb.xlsx.write(res);
     res.end();
@@ -151,23 +244,28 @@ router.get("/summary/export", authMiddleware, async (req, res) => {
 });
 
 // =====================================================
-// ✅ 1c) SALES ANALYTICS: khách mua + top hàng + COGS + profit
+// 1c) SALES ANALYTICS: khách mua + COGS = tổng chi phí nhập + profit
 // GET /api/reports/sales-analytics?from&to
 // =====================================================
 router.get("/sales-analytics", authMiddleware, async (req, res) => {
   try {
-    const { from, to, top = 10 } = req.query;
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+    const { from, to } = req.query;
     const range = parseDateRange(from, to);
     if (range.error) return res.status(400).json({ message: range.error });
 
-    const match = {};
+    // ===== 1) Doanh thu + số đơn từ Invoice =====
+    const matchInvoice = {
+      owner: new mongoose.Types.ObjectId(String(userId)),
+    };
     if (range.createdAt && Object.keys(range.createdAt).length) {
-      match.createdAt = range.createdAt;
+      matchInvoice.createdAt = range.createdAt;
     }
 
-    // 1) Revenue tổng
     const revenueAgg = await Invoice.aggregate([
-      { $match: match },
+      { $match: matchInvoice },
       {
         $group: {
           _id: null,
@@ -176,101 +274,52 @@ router.get("/sales-analytics", authMiddleware, async (req, res) => {
         },
       },
     ]);
+
     const revenue = revenueAgg?.[0]?.revenue || 0;
     const invoicesCount = revenueAgg?.[0]?.invoicesCount || 0;
 
-    // 2) Đếm khách mua (distinct theo customerPhone)
+    // ===== 2) Số khách mua (distinct theo customerPhone + customerId) =====
     const customersAgg = await Invoice.aggregate([
-      { $match: match },
-      { $group: { _id: "$customerPhone" } },
+      { $match: matchInvoice },
+      {
+        $group: {
+          _id: {
+            phone: "$customerPhone",
+            cid: "$customerId",
+          },
+        },
+      },
       { $count: "customersCount" },
     ]);
     const customersCount = customersAgg?.[0]?.customersCount || 0;
 
-    // 3) Top mặt hàng bán + giá vốn + lợi nhuận (ước tính theo Material.giaNhap)
-    const pipeline = [
-      { $match: match },
-      { $unwind: "$items" },
-      {
-        $lookup: {
-          from: "materials",
-          localField: "items.materialId",
-          foreignField: "_id",
-          as: "m",
-        },
-      },
-      { $unwind: { path: "$m", preserveNullAndEmptyArrays: true } },
-      {
-        $addFields: {
-          qty: { $ifNull: ["$items.qty", 0] },
-          revenueLine: { $ifNull: ["$items.lineTotal", { $multiply: ["$items.qty", "$items.price"] }] },
-          costLine: {
-            $multiply: [
-              { $ifNull: ["$items.qty", 0] },
-              { $ifNull: ["$m.giaNhap", 0] },
-            ],
-          },
-        },
-      },
-      {
-        $group: {
-          _id: "$items.materialId",
-          itemName: { $first: "$items.itemName" },
-          itemCode: { $first: "$items.itemCode" },
-          unit: { $first: "$items.unit" },
+    // ===== 3) Tổng chi phí nhập kho (giá vốn) từ StockIn – giống /summary =====
+    let importsTotalCost = 0;
+    let stockIns = [];
+    if (StockIn) {
+      const stockInQueryBase =
+        range.createdAt && Object.keys(range.createdAt).length
+          ? { createdAt: range.createdAt }
+          : {};
 
-          totalQty: { $sum: "$qty" },
-          totalRevenue: { $sum: "$revenueLine" },
-          totalCOGS: { $sum: "$costLine" },
-        },
-      },
-      {
-        $addFields: {
-          profit: { $subtract: ["$totalRevenue", "$totalCOGS"] },
-          marginPct: {
-            $cond: [
-              { $gt: ["$totalRevenue", 0] },
-              { $multiply: [{ $divide: [{ $subtract: ["$totalRevenue", "$totalCOGS"] }, "$totalRevenue"] }, 100] },
-              0,
-            ],
-          },
-        },
-      },
-      { $sort: { totalQty: -1 } },
-      { $limit: Math.max(1, Math.min(Number(top) || 10, 50)) },
-    ];
+      const stockInOwner = buildStockInOwnerQuery(req);
+      if (stockInOwner.error) {
+        return res.status(401).json({ message: stockInOwner.error });
+      }
 
-    const topItems = await Invoice.aggregate(pipeline);
+      const stockInQuery = { ...stockInQueryBase, ...stockInOwner };
+      stockIns = await StockIn.find(stockInQuery).select("items createdAt");
+      importsTotalCost = stockIns.reduce(
+        (sum, doc) => sum + calcStockInDocCost(doc),
+        0
+      );
+    }
 
-    // 4) Tổng COGS (ước tính) + Profit tổng
-    const cogsAgg = await Invoice.aggregate([
-      { $match: match },
-      { $unwind: "$items" },
-      {
-        $lookup: {
-          from: "materials",
-          localField: "items.materialId",
-          foreignField: "_id",
-          as: "m",
-        },
-      },
-      { $unwind: { path: "$m", preserveNullAndEmptyArrays: true } },
-      {
-        $group: {
-          _id: null,
-          cogs: {
-            $sum: {
-              $multiply: [
-                { $ifNull: ["$items.qty", 0] },
-                { $ifNull: ["$m.giaNhap", 0] },
-              ],
-            },
-          },
-        },
-      },
-    ]);
-    const cogs = cogsAgg?.[0]?.cogs || 0;
+    const cogs = importsTotalCost;
     const profit = revenue - cogs;
+
+    // ===== 4) TopItems: để FE tự tính fallback nên trả mảng rỗng =====
+    const topItems = [];
 
     return res.json({
       from,
@@ -282,7 +331,7 @@ router.get("/sales-analytics", authMiddleware, async (req, res) => {
       profit,
       status: profit >= 0 ? "LỜI" : "LỖ",
       topItems,
-      note: "COGS/profit là ước tính theo Material.giaNhap hiện tại (Invoice không lưu giá nhập theo thời điểm bán).",
+      note: "COGS/lợi nhuận lấy trực tiếp từ tổng chi phí nhập kho (StockIn) cùng kỳ.",
     });
   } catch (err) {
     console.error("❌ report sales-analytics error:", err);
@@ -302,11 +351,17 @@ router.get("/stockin", authMiddleware, async (req, res) => {
     const range = parseDateRange(from, to);
     if (range.error) return res.status(400).json({ message: range.error });
 
-    const q = range.createdAt && Object.keys(range.createdAt).length
-      ? { createdAt: range.createdAt }
-      : {};
+    const qBase =
+      range.createdAt && Object.keys(range.createdAt).length
+        ? { createdAt: range.createdAt }
+        : {};
 
-    const list = await StockIn.find(q).sort({ createdAt: -1 });
+    const qOwner = buildStockInOwnerQuery(req);
+    if (qOwner.error) return res.status(401).json({ message: qOwner.error });
+
+    const list = await StockIn.find({ ...qBase, ...qOwner }).sort({
+      createdAt: -1,
+    });
     return res.json(list);
   } catch (err) {
     console.error("❌ report stockin error:", err);
@@ -314,48 +369,163 @@ router.get("/stockin", authMiddleware, async (req, res) => {
   }
 });
 
+// =====================================================
 // 2b) EXPORT STOCK IN EXCEL
+// GET /api/reports/stockin/export?from&to&type=summary|detail|both
+// =====================================================
 router.get("/stockin/export", authMiddleware, async (req, res) => {
   try {
     if (!StockIn) return res.status(500).json({ message: "Thiếu model StockIn" });
 
-    const { from, to } = req.query;
+    const { from, to, type = "both" } = req.query;
     const range = parseDateRange(from, to);
     if (range.error) return res.status(400).json({ message: range.error });
 
-    const q = range.createdAt && Object.keys(range.createdAt).length
-      ? { createdAt: range.createdAt }
-      : {};
+    const qBase =
+      range.createdAt && Object.keys(range.createdAt).length
+        ? { createdAt: range.createdAt }
+        : {};
 
-    const list = await StockIn.find(q).sort({ createdAt: -1 });
+    const qOwner = buildStockInOwnerQuery(req);
+    if (qOwner.error) return res.status(401).json({ message: qOwner.error });
+
+    const list = await StockIn.find({ ...qBase, ...qOwner })
+      .populate(
+        "items.material",
+        "tenVatLieu maVatLieu donViTinh ten name ma code dvt unit"
+      )
+      .sort({ createdAt: -1 });
 
     const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet("NhapKho");
 
-    ws.addRow(["Thời gian", "Đối tác", "Số dòng", "Tổng chi phí", "Ghi chú"]);
-    list.forEach((doc) => {
-      const items = Array.isArray(doc.items) ? doc.items : [];
-      const totalCost = calcStockInDocCost(doc);
+    if (type === "summary" || type === "both") {
+      const ws = wb.addWorksheet("TongHopNhapKho");
+      ws.addRow(["Thời gian", "Đối tác", "Số dòng", "Tổng chi phí", "Ghi chú"]);
 
+      list.forEach((doc) => {
+        const items = Array.isArray(doc.items) ? doc.items : [];
+        const totalCost = calcStockInDocCost(doc);
+
+        ws.addRow([
+          doc.createdAt ? new Date(doc.createdAt).toLocaleString("vi-VN") : "",
+          doc.partner || doc.supplier || "",
+          items.length,
+          totalCost,
+          doc.note || "",
+        ]);
+      });
+
+      const grandTotal = list.reduce(
+        (sum, d) => sum + calcStockInDocCost(d),
+        0
+      );
+      ws.addRow([]);
+      ws.addRow(["", "", "TỔNG", grandTotal, ""]);
+
+      ws.columns = [
+        { width: 22 },
+        { width: 28 },
+        { width: 10 },
+        { width: 16 },
+        { width: 40 },
+      ];
+    }
+
+    if (type === "detail" || type === "both") {
+      const ws = wb.addWorksheet("ChiTietNhapKho");
       ws.addRow([
-        doc.createdAt ? new Date(doc.createdAt).toLocaleString("vi-VN") : "",
-        doc.partner || doc.supplier || "",
-        items.length,
-        totalCost,
-        doc.note || "",
+        "Thời gian",
+        "Đối tác",
+        "Mã hàng",
+        "Tên hàng",
+        "ĐVT",
+        "Số lượng nhập",
+        "Giá nhập",
+        "Thành tiền",
+        "Ghi chú",
       ]);
-    });
 
-    ws.columns = [
-      { width: 22 },
-      { width: 25 },
-      { width: 10 },
-      { width: 15 },
-      { width: 40 },
-    ];
+      let detailTotal = 0;
 
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="BaoCaoNhapKho_${from || "ALL"}_${to || "ALL"}.xlsx"`);
+      list.forEach((doc) => {
+        const items = Array.isArray(doc.items) ? doc.items : [];
+        items.forEach((it) => {
+          const qty = money(it.soLuong ?? it.qty ?? it.quantity);
+          const importPrice = money(
+            it.giaNhap ?? it.importPrice ?? it.price
+          );
+          const lineCost = qty * importPrice;
+          detailTotal += lineCost;
+
+          const m = it.material || {};
+          const code =
+            it.maVatLieu ||
+            it.ma ||
+            it.code ||
+            m.maVatLieu ||
+            m.ma ||
+            m.code ||
+            "";
+          const name =
+            it.tenVatLieu ||
+            it.ten ||
+            it.name ||
+            it.itemName ||
+            m.tenVatLieu ||
+            m.ten ||
+            m.name ||
+            "";
+          const unit =
+            it.donViTinh ||
+            it.dvt ||
+            it.unit ||
+            m.donViTinh ||
+            m.dvt ||
+            m.unit ||
+            "";
+
+          ws.addRow([
+            doc.createdAt ? new Date(doc.createdAt).toLocaleString("vi-VN") : "",
+            doc.partner || doc.supplier || "",
+            code,
+            name,
+            unit,
+            qty,
+            importPrice,
+            lineCost,
+            doc.note || "",
+          ]);
+        });
+      });
+
+      ws.addRow([]);
+      ws.addRow(["", "", "", "", "", "", "TỔNG", detailTotal, ""]);
+
+      ws.columns = [
+        { width: 22 },
+        { width: 28 },
+        { width: 14 },
+        { width: 30 },
+        { width: 10 },
+        { width: 14 },
+        { width: 14 },
+        { width: 16 },
+        { width: 40 },
+      ];
+    }
+
+    const fileType = ["summary", "detail", "both"].includes(type)
+      ? type
+      : "both";
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="BaoCaoNhapKho_${fileType}_${from || "ALL"}_${to || "ALL"}.xlsx"`
+    );
 
     await wb.xlsx.write(res);
     res.end();
@@ -371,13 +541,20 @@ router.get("/stockin/export", authMiddleware, async (req, res) => {
 // =====================================================
 router.get("/sales", authMiddleware, async (req, res) => {
   try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
     const { from, to } = req.query;
     const range = parseDateRange(from, to);
     if (range.error) return res.status(400).json({ message: range.error });
 
-    const q = range.createdAt && Object.keys(range.createdAt).length
-      ? { createdAt: range.createdAt }
-      : {};
+    const q = buildOwnerQuery(
+      req,
+      range.createdAt && Object.keys(range.createdAt).length
+        ? { createdAt: range.createdAt }
+        : {}
+    );
+    if (q.error) return res.status(401).json({ message: q.error });
 
     const list = await Invoice.find(q).sort({ createdAt: -1 });
     return res.json(list);
@@ -387,23 +564,36 @@ router.get("/sales", authMiddleware, async (req, res) => {
   }
 });
 
-// 3b) EXPORT SALES EXCEL
 router.get("/sales/export", authMiddleware, async (req, res) => {
   try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
     const { from, to } = req.query;
     const range = parseDateRange(from, to);
     if (range.error) return res.status(400).json({ message: range.error });
 
-    const q = range.createdAt && Object.keys(range.createdAt).length
-      ? { createdAt: range.createdAt }
-      : {};
+    const q = buildOwnerQuery(
+      req,
+      range.createdAt && Object.keys(range.createdAt).length
+        ? { createdAt: range.createdAt }
+        : {}
+    );
+    if (q.error) return res.status(401).json({ message: q.error });
 
     const list = await Invoice.find(q).sort({ createdAt: -1 });
 
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("DonDaBan");
 
-    ws.addRow(["Thời gian", "Mã hóa đơn", "Khách hàng", "Nhân viên", "Tổng tiền", "Sau giảm"]);
+    ws.addRow([
+      "Thời gian",
+      "Mã hóa đơn",
+      "Khách hàng",
+      "Nhân viên",
+      "Tổng tiền",
+      "Sau giảm",
+    ]);
     list.forEach((inv) => {
       ws.addRow([
         inv.createdAt ? new Date(inv.createdAt).toLocaleString("vi-VN") : "",
@@ -424,8 +614,14 @@ router.get("/sales/export", authMiddleware, async (req, res) => {
       { width: 14 },
     ];
 
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="BaoCaoDonDaBan_${from || "ALL"}_${to || "ALL"}.xlsx"`);
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="BaoCaoDonDaBan_${from || "ALL"}_${to || "ALL"}.xlsx"`
+    );
 
     await wb.xlsx.write(res);
     res.end();

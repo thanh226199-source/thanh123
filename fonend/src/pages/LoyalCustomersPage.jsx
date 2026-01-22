@@ -1,3 +1,4 @@
+// src/pages/LoyalCustomersPage.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import TTQLogo from "../assets/ttq-logo.png";
@@ -16,6 +17,18 @@ const rankLabel = (r) =>
 const pickName = (c) => c?.name || c?.customerName || c?.fullName || "—";
 const pickPhone = (c) => c?.phone || c?.customerPhone || "—";
 const pickAddress = (c) => c?.address || c?.customerAddress || "";
+
+// ✅ tính rank nếu backend chưa gửi rank
+const getRankByPoints = (points = 0) => {
+  const p = Number(points || 0);
+  if (p >= 10000) return "DIAMOND";
+  if (p >= 5000) return "PLATINUM";
+  if (p >= 1000) return "GOLD";
+  return "SILVER";
+};
+
+const diffDays = (from, to) =>
+  Math.floor((from.getTime() - to.getTime()) / (1000 * 60 * 60 * 24));
 
 export default function LoyalCustomersPage() {
   const navigate = useNavigate();
@@ -38,6 +51,8 @@ export default function LoyalCustomersPage() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
+
+  const today = useMemo(() => new Date(), []);
 
   const fetchList = async () => {
     try {
@@ -104,9 +119,48 @@ export default function LoyalCustomersPage() {
     }
   };
 
+  // ====== SUMMARY BAR ======
+  const stats = useMemo(() => {
+    if (!list.length) {
+      return {
+        totalCustomers: 0,
+        totalPoints: 0,
+        vipCount: 0,
+        active30d: 0,
+      };
+    }
+
+    let totalPoints = 0;
+    let vipCount = 0;
+    let active30d = 0;
+
+    for (const c of list) {
+      const pts = Number(c.totalPoints || 0);
+      totalPoints += Number.isFinite(pts) ? pts : 0;
+
+      const rankCode = c.rank || getRankByPoints(pts);
+      if (rankCode === "PLATINUM" || rankCode === "DIAMOND") vipCount += 1;
+
+      if (c.lastPurchaseAt) {
+        const last = new Date(c.lastPurchaseAt);
+        const days = diffDays(today, last);
+        if (days <= 30) active30d += 1;
+      }
+    }
+
+    return {
+      totalCustomers: list.length,
+      totalPoints,
+      vipCount,
+      active30d,
+    };
+  }, [list, today]);
+
+  const formatNumber = (n) => Number(n || 0).toLocaleString("vi-VN");
+
   return (
     <div className="ttq-page" style={{ padding: 16 }}>
-      {/* TOPBAR: chỉ 2 nút "Tải lại" + "Về trang chính" */}
+      {/* TOPBAR */}
       <div className="ttq-topbar" style={{ borderRadius: 14 }}>
         <div className="ttq-topbar-left">
           <img className="ttq-topbar-logo" src={TTQLogo} alt="TTQ" />
@@ -129,6 +183,39 @@ export default function LoyalCustomersPage() {
         </div>
       </div>
 
+      {/* SUMMARY – 4 KHUNG THỐNG KÊ */}
+      <div
+        className="ttq-summaryRow"
+        style={{
+          maxWidth: 1200,
+          margin: "12px auto 0",
+          display: "grid",
+          gap: 10,
+          gridTemplateColumns: "repeat(4,minmax(0,1fr))",
+        }}
+      >
+        <div className="ttq-summaryCard">
+          <div className="ttq-summaryLabel">Tổng khách</div>
+          <div className="ttq-summaryValue">{stats.totalCustomers}</div>
+          <div className="ttq-summarySub">Đang được theo dõi trong hệ thống</div>
+        </div>
+        <div className="ttq-summaryCard">
+          <div className="ttq-summaryLabel">Tổng điểm</div>
+          <div className="ttq-summaryValue">{formatNumber(stats.totalPoints)}</div>
+          <div className="ttq-summarySub">Tích luỹ của tất cả khách hàng</div>
+        </div>
+        <div className="ttq-summaryCard ttq-summaryVip">
+          <div className="ttq-summaryLabel">Khách VIP</div>
+          <div className="ttq-summaryValue">{stats.vipCount}</div>
+          <div className="ttq-summarySub">Hạng Vàng / Kim cương</div>
+        </div>
+        <div className="ttq-summaryCard">
+          <div className="ttq-summaryLabel">Hoạt động 30 ngày</div>
+          <div className="ttq-summaryValue">{stats.active30d}</div>
+          <div className="ttq-summarySub">Mua ít nhất 1 lần trong 30 ngày</div>
+        </div>
+      </div>
+
       <div className="ttq-materials-grid" style={{ marginTop: 12 }}>
         {/* LEFT: FORM */}
         <div className="ttq-card">
@@ -138,7 +225,7 @@ export default function LoyalCustomersPage() {
                 {editingId ? "Cập nhật khách hàng" : "Thêm khách hàng"}
               </div>
               <div className="ttq-card-sub">
-                Quản lý thông tin + điểm + hạng tự động (cập nhật khi tích điểm từ hoá đơn).
+                Quản lý thông tin khách và đồng bộ với hệ thống tích điểm.
               </div>
             </div>
             <span className="ttq-badge">{editingId ? "EDIT" : "NEW"}</span>
@@ -161,6 +248,7 @@ export default function LoyalCustomersPage() {
                   className="ttq-input2"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
+                  placeholder="VD: 090xxxxxxx"
                 />
               </div>
 
@@ -170,10 +258,14 @@ export default function LoyalCustomersPage() {
                   className="ttq-input2"
                   value={address}
                   onChange={(e) => setAddress(e.target.value)}
+                  placeholder="VD: Sa Đéc, Đồng Tháp"
                 />
               </div>
 
-              <div className="ttq-span2" style={{ display: "flex", gap: 10 }}>
+              <div
+                className="ttq-span2"
+                style={{ display: "flex", gap: 10, flexWrap: "wrap" }}
+              >
                 <button className="ttq-btn-primary" type="button" onClick={onSubmit}>
                   {editingId ? "Lưu cập nhật" : "Tạo khách"}
                 </button>
@@ -189,6 +281,14 @@ export default function LoyalCustomersPage() {
                 >
                   Xem quy tắc tích điểm
                 </button>
+              </div>
+
+              <div
+                className="ttq-span2"
+                style={{ marginTop: 4, fontSize: 12, color: "#94a3b8" }}
+              >
+                Lưu ý: Thông tin khách hàng chỉ dùng cho mục đích bán hàng & chăm sóc khách,
+                không chia sẻ cho bên thứ ba.
               </div>
             </div>
           </div>
@@ -224,14 +324,13 @@ export default function LoyalCustomersPage() {
 
           {err ? <div style={{ padding: 12, color: "#991b1b" }}>❌ {err}</div> : null}
 
-          {/* ✅ bảng không scroll ngang, cột tự co */}
           <div className="ttq-table-wrap">
             <table className="ttq-table">
               <thead>
                 <tr>
                   <th className="col-name">Khách hàng</th>
                   <th className="col-phone">SĐT</th>
-                  <th className="col-rank">Hạng</th>
+                  <th className="col-rank">Hạng / Trạng thái</th>
                   <th className="col-points">Tổng điểm</th>
                   <th className="col-last">Lần mua cuối</th>
                   <th className="col-actions">Thao tác</th>
@@ -258,53 +357,139 @@ export default function LoyalCustomersPage() {
                     </td>
                   </tr>
                 ) : (
-                  list.map((c) => (
-                    <tr key={c._id}>
-                      <td className="col-name">
-                        <div className="ttq-cell-title" title={pickName(c)}>
-                          {pickName(c)}
-                        </div>
-                        <div className="ttq-cell-sub" title={pickAddress(c)}>
-                          {pickAddress(c)}
-                        </div>
-                      </td>
+                  list.map((c) => {
+                    const pts = Number(c.totalPoints || 0);
+                    const rankCode = c.rank || getRankByPoints(pts);
+                    const lastAt = c.lastPurchaseAt
+                      ? new Date(c.lastPurchaseAt)
+                      : null;
 
-                      <td className="ttq-td-phone col-phone" style={{ fontWeight: 800 }}>
-                        <span title={pickPhone(c)}>{pickPhone(c)}</span>
-                      </td>
+                    let statusLabel = "Mới";
+                    if (lastAt) {
+                      const days = diffDays(today, lastAt);
+                      if (days <= 30) statusLabel = "Hoạt động";
+                      else if (days <= 90) statusLabel = "Nguy cơ mất";
+                      else statusLabel = "Không mua lâu";
+                    }
 
-                      <td className="col-rank" style={{ fontWeight: 900 }}>
-                        {rankLabel(c.rank)}
-                      </td>
+                    const isVip =
+                      rankCode === "PLATINUM" || rankCode === "DIAMOND";
 
-                      <td className="col-points" style={{ textAlign: "right", fontWeight: 900 }}>
-                        {(c.totalPoints || 0).toLocaleString("vi-VN")}
-                      </td>
+                    return (
+                      <tr key={c._id} className={isVip ? "ttq-row-vip" : ""}>
+                        <td className="col-name">
+                          <div className="ttq-cell-title" title={pickName(c)}>
+                            {pickName(c)}
+                          </div>
+                          <div className="ttq-cell-sub" title={pickAddress(c)}>
+                            {pickAddress(c)}
+                          </div>
+                        </td>
 
-                      <td className="ttq-td-last col-last" style={{ color: "#6b7280" }}>
-                        {c.lastPurchaseAt
-                          ? new Date(c.lastPurchaseAt).toLocaleString("vi-VN")
-                          : "—"}
-                      </td>
+                        <td
+                          className="ttq-td-phone col-phone"
+                          style={{ fontWeight: 800 }}
+                        >
+                          <span title={pickPhone(c)}>{pickPhone(c)}</span>
+                        </td>
 
-                      <td className="col-actions" style={{ textAlign: "center" }}>
-                        <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
-                          <button className="ttq-btn-outline" onClick={() => startEdit(c)}>
-                            Sửa
-                          </button>
-                          <button className="ttq-btn-outline" onClick={() => onDelete(c._id)}>
-                            Xoá
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                        <td className="col-rank">
+                          <div
+                            className={`ttq-rank-pill ttq-rank-${rankCode}`}
+                            title={rankLabel(rankCode)}
+                          >
+                            {rankLabel(rankCode)}
+                          </div>
+                          <div className="ttq-cell-sub">{statusLabel}</div>
+                        </td>
+
+                        <td
+                          className="col-points"
+                          style={{ textAlign: "right", fontWeight: 900 }}
+                        >
+                          {formatNumber(pts)}
+                        </td>
+
+                        <td
+                          className="ttq-td-last col-last"
+                          style={{ color: "#6b7280" }}
+                        >
+                          {lastAt ? lastAt.toLocaleString("vi-VN") : "—"}
+                        </td>
+
+                        <td className="col-actions" style={{ textAlign: "center" }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: 8,
+                              justifyContent: "center",
+                            }}
+                          >
+                            <button
+                              className="ttq-btn-outline"
+                              onClick={() => startEdit(c)}
+                            >
+                              Sửa
+                            </button>
+                            <button
+                              className="ttq-btn-outline"
+                              onClick={() => onDelete(c._id)}
+                            >
+                              Xoá
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
           </div>
 
           <style>{`
+            /* ===== KHUNG TÓM TẮT (4 CARD) ===== */
+            .ttq-summaryCard{
+              background:#ffffff;
+              border-radius:14px;
+              border:1px solid #e5e7eb;
+              padding:10px 12px;
+              box-shadow:0 10px 26px rgba(15,23,42,0.06);
+            }
+            .ttq-summaryLabel{
+              font-size:11px;
+              font-weight:800;
+              letter-spacing:.05em;
+              text-transform:uppercase;
+              color:#9ca3af;
+            }
+            .ttq-summaryValue{
+              margin-top:4px;
+              font-size:18px;
+              font-weight:900;
+              color:#0f172a;
+            }
+            .ttq-summarySub{
+              margin-top:2px;
+              font-size:12px;
+              color:#94a3b8;
+            }
+            .ttq-summaryVip{
+              background:linear-gradient(135deg,#fef9c3,#fefce8);
+              border-color:#fde68a;
+            }
+            @media (max-width: 1024px){
+              .ttq-summaryRow{
+                grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+              }
+            }
+            @media (max-width: 640px){
+              .ttq-summaryRow{
+                grid-template-columns:repeat(1,minmax(0,1fr)) !important;
+              }
+            }
+
+            /* ===== BẢNG DANH SÁCH ===== */
             .ttq-table-wrap{ padding: 0 12px 12px; }
 
             .ttq-table{
@@ -336,11 +521,15 @@ export default function LoyalCustomersPage() {
 
             .ttq-table tr:hover td{ background:#fbfdff; }
 
+            .ttq-row-vip td{
+              background:linear-gradient(90deg,rgba(250,250,255,0.9),#ffffff);
+            }
+
             .col-name{ width: 30%; }
             .col-phone{ width: 14%; }
-            .col-rank{ width: 12%; }
-            .col-points{ width: 14%; text-align:right; }
-            .col-last{ width: 18%; }
+            .col-rank{ width: 16%; }
+            .col-points{ width: 12%; text-align:right; }
+            .col-last{ width: 16%; }
             .col-actions{ width: 12%; text-align:center; }
 
             .ttq-cell-title{
@@ -356,19 +545,51 @@ export default function LoyalCustomersPage() {
               text-overflow:ellipsis;
             }
 
+            /* Badge hạng */
+            .ttq-rank-pill{
+              display:inline-flex;
+              align-items:center;
+              justify-content:center;
+              min-width:72px;
+              padding:4px 8px;
+              border-radius:999px;
+              font-size:12px;
+              font-weight:800;
+              border:1px solid #e5e7eb;
+              background:#f9fafb;
+              color:#111827;
+              margin-bottom:2px;
+            }
+            .ttq-rank-SILVER{
+              background:#f9fafb;
+            }
+            .ttq-rank-GOLD{
+              background:linear-gradient(135deg,#fef9c3,#fef3c7);
+              border-color:#fde68a;
+            }
+            .ttq-rank-PLATINUM{
+              background:linear-gradient(135deg,#e0f2fe,#e5e7eb);
+              border-color:#bfdbfe;
+            }
+            .ttq-rank-DIAMOND{
+              background:linear-gradient(135deg,#e0f2fe,#f5d0fe);
+              border-color:#bfdbfe;
+            }
+
             /* responsive: nhỏ thì ẩn bớt cột để khỏi scroll ngang */
             @media (max-width: 1100px){
               .col-last{ display:none; }
               .ttq-td-last{ display:none; }
               .col-name{ width: 36%; }
-              .col-actions{ width: 16%; }
+              .col-actions{ width: 14%; }
             }
 
             @media (max-width: 900px){
               .col-phone{ display:none; }
               .ttq-td-phone{ display:none; }
-              .col-name{ width: 44%; }
+              .col-name{ width: 42%; }
               .col-actions{ width: 18%; }
+              .col-rank{ width: 22%; }
             }
           `}</style>
         </div>

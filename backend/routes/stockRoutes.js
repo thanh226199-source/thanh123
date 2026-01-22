@@ -6,8 +6,7 @@ const StockIn = require("../models/StockIn");
 const StockOut = require("../models/StockOut");
 const Material = require("../models/Material");
 
-// ✅ middleware chuẩn
-const { authMiddleware, requireAdmin } = require("../middleware/authMiddleware");
+const { authMiddleware } = require("../middleware/authMiddleware");
 
 /* =========================
    Helper: gộp items trùng material
@@ -32,11 +31,16 @@ function mergeItems(items, priceField) {
 }
 
 /* =========================
-   GET: lịch sử nhập (20 gần nhất)
+   GET: lịch sử nhập (20 gần nhất) - ✅ chỉ của user
    ========================= */
 router.get("/in", authMiddleware, async (req, res) => {
   try {
-    const rows = await StockIn.find().sort({ createdAt: -1 }).limit(20);
+    const userId = req.user.userId;
+
+    const rows = await StockIn.find({ owner: userId })
+      .sort({ createdAt: -1 })
+      .limit(20);
+
     res.json(rows);
   } catch (err) {
     console.error(err);
@@ -46,12 +50,13 @@ router.get("/in", authMiddleware, async (req, res) => {
 
 /* =========================
    POST: tạo phiếu nhập nhiều món
-   (admin)
    body: { partner, note, items: [{material, soLuong, giaNhap}] }
+   ✅ bỏ requireAdmin để user nào cũng tự quản kho riêng
    ========================= */
-router.post("/in", authMiddleware, requireAdmin, async (req, res) => {
+router.post("/in", authMiddleware, async (req, res) => {
   const session = await Material.startSession();
   try {
+    const userId = req.user.userId;
     const { partner, note, items } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
@@ -70,14 +75,17 @@ router.post("/in", authMiddleware, requireAdmin, async (req, res) => {
     }
 
     const merged = mergeItems(items, "giaNhap");
-
     const materialIds = merged.map((i) => i.material);
-    const mats = await Material.find({ _id: { $in: materialIds } });
+
+    // ✅ chỉ lấy vật liệu thuộc kho của user
+    const mats = await Material.find({ _id: { $in: materialIds }, owner: userId });
     const map = new Map(mats.map((m) => [String(m._id), m]));
 
     for (const it of merged) {
       if (!map.get(String(it.material))) {
-        return res.status(404).json({ message: "Có vật liệu không tồn tại." });
+        return res.status(404).json({
+          message: "Có vật liệu không tồn tại hoặc không thuộc kho của bạn.",
+        });
       }
     }
 
@@ -96,9 +104,10 @@ router.post("/in", authMiddleware, requireAdmin, async (req, res) => {
       await StockIn.create(
         [
           {
+            owner: userId,          // ✅ tách dữ liệu theo tài khoản
             partner: partner || "",
             note: note || "",
-            createdBy: req.user?._id || null, // ✅ lấy từ middleware
+            createdBy: userId,      // ✅ luôn dùng userId
             items: normalizedItems,
           },
         ],
@@ -106,11 +115,16 @@ router.post("/in", authMiddleware, requireAdmin, async (req, res) => {
       );
 
       for (const it of normalizedItems) {
-        await Material.findByIdAndUpdate(
-          it.material,
+        // ✅ chỉ update tồn kho vật liệu thuộc user
+        const updated = await Material.findOneAndUpdate(
+          { _id: it.material, owner: userId },
           { $inc: { soLuongTon: it.soLuong } },
-          { session }
+          { session, new: true }
         );
+
+        if (!updated) {
+          throw new Error("Vật liệu không thuộc kho của bạn hoặc không tồn tại.");
+        }
       }
     });
 
@@ -124,11 +138,16 @@ router.post("/in", authMiddleware, requireAdmin, async (req, res) => {
 });
 
 /* =========================
-   GET: lịch sử xuất (20 gần nhất)
+   GET: lịch sử xuất (20 gần nhất) - ✅ chỉ của user
    ========================= */
 router.get("/out", authMiddleware, async (req, res) => {
   try {
-    const rows = await StockOut.find().sort({ createdAt: -1 }).limit(20);
+    const userId = req.user.userId;
+
+    const rows = await StockOut.find({ owner: userId })
+      .sort({ createdAt: -1 })
+      .limit(20);
+
     res.json(rows);
   } catch (err) {
     console.error(err);
@@ -138,13 +157,13 @@ router.get("/out", authMiddleware, async (req, res) => {
 
 /* =========================
    POST: tạo phiếu xuất nhiều món
-   (admin)
    body: { partner, note, items: [{material, soLuong, giaXuat}] }
-   - chặn xuất âm tồn
+   ✅ bỏ requireAdmin để user nào cũng tự quản kho riêng
    ========================= */
-router.post("/out", authMiddleware, requireAdmin, async (req, res) => {
+router.post("/out", authMiddleware, async (req, res) => {
   const session = await Material.startSession();
   try {
+    const userId = req.user.userId;
     const { partner, note, items } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
@@ -163,14 +182,18 @@ router.post("/out", authMiddleware, requireAdmin, async (req, res) => {
     }
 
     const merged = mergeItems(items, "giaXuat");
-
     const materialIds = merged.map((i) => i.material);
-    const mats = await Material.find({ _id: { $in: materialIds } });
+
+    // ✅ chỉ lấy vật liệu thuộc kho của user
+    const mats = await Material.find({ _id: { $in: materialIds }, owner: userId });
     const map = new Map(mats.map((m) => [String(m._id), m]));
 
     for (const it of merged) {
       const m = map.get(String(it.material));
-      if (!m) return res.status(404).json({ message: "Có vật liệu không tồn tại." });
+      if (!m)
+        return res.status(404).json({
+          message: "Có vật liệu không tồn tại hoặc không thuộc kho của bạn.",
+        });
 
       const qty = Number(it.soLuong);
       const ton = Number(m.soLuongTon || 0);
@@ -197,9 +220,10 @@ router.post("/out", authMiddleware, requireAdmin, async (req, res) => {
       await StockOut.create(
         [
           {
+            owner: userId,
             partner: partner || "",
             note: note || "",
-            createdBy: req.user?._id || null, // ✅ lấy từ middleware
+            createdBy: userId,
             items: normalizedItems,
           },
         ],
@@ -207,11 +231,15 @@ router.post("/out", authMiddleware, requireAdmin, async (req, res) => {
       );
 
       for (const it of normalizedItems) {
-        await Material.findByIdAndUpdate(
-          it.material,
+        const updated = await Material.findOneAndUpdate(
+          { _id: it.material, owner: userId },
           { $inc: { soLuongTon: -it.soLuong } },
-          { session }
+          { session, new: true }
         );
+
+        if (!updated) {
+          throw new Error("Vật liệu không thuộc kho của bạn hoặc không tồn tại.");
+        }
       }
     });
 

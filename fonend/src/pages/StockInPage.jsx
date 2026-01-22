@@ -20,7 +20,7 @@ const parseMoneyVN = (v) => {
   return s ? Number(s) : 0;
 };
 
-const money = (n) => (Number(n || 0)).toLocaleString("vi-VN");
+const money = (n) => Number(n || 0).toLocaleString("vi-VN");
 
 const normalizeArray = (res) => {
   if (Array.isArray(res)) return res;
@@ -34,10 +34,33 @@ const normalizeArray = (res) => {
 const pickMatName = (m) => m?.tenVatLieu ?? m?.name ?? m?.materialName ?? "Không tên";
 const pickMatCode = (m) => m?.maVatLieu ?? m?.code ?? m?.materialCode ?? "";
 
+// ✅ NCC + Giá nhập mặc định từ kho hàng (Material)
+const pickSupplier = (m) => m?.nhaCungCap ?? m?.supplier ?? "";
+const pickImportPrice = (m) => Number(m?.giaNhap ?? m?.importPrice ?? 0);
+
+// ✅ ĐVT từ kho hàng
+const pickUnit = (m) => (m?.donViTinh ?? m?.unit ?? m?.dvt ?? "").toString();
+
+/** ✅ Mã phiếu nhập: ưu tiên code/receiptNo nếu backend có, nếu không dùng _id cắt 6 ký tự */
+const pickReceiptCode = (h) =>
+  (h?.code ||
+    h?.receiptNo ||
+    h?.stockInNo ||
+    h?.phieuNo ||
+    h?.maPhieu ||
+    h?.maPhieuNhap ||
+    "")
+    .toString()
+    .trim() ||
+  String(h?._id || h?.id || "").slice(-6).toUpperCase();
+
 function calcReceiptSummary(h) {
   const items = Array.isArray(h?.items) ? h.items : [];
   const lines = items.length;
-  const totalQty = items.reduce((s, it) => s + Number(it?.soLuong ?? it?.qty ?? it?.quantity ?? 0), 0);
+  const totalQty = items.reduce(
+    (s, it) => s + Number(it?.soLuong ?? it?.qty ?? it?.quantity ?? 0),
+    0
+  );
   const totalMoney = items.reduce((s, it) => {
     const qty = Number(it?.soLuong ?? it?.qty ?? it?.quantity ?? 0);
     const price = Number(it?.giaNhap ?? it?.price ?? 0);
@@ -55,7 +78,6 @@ function Modal({ open, title, onClose, children }) {
       role="dialog"
       aria-modal="true"
       onMouseDown={(e) => {
-        // click outside to close
         if (e.target === e.currentTarget) onClose?.();
       }}
       style={{
@@ -121,6 +143,9 @@ export default function StockInPage() {
   const [materials, setMaterials] = useState([]);
   const [history, setHistory] = useState([]);
 
+  // ✅ search phiếu nhập theo mã phiếu
+  const [searchReceipt, setSearchReceipt] = useState("");
+
   // modal detail
   const [detailOpen, setDetailOpen] = useState(false);
   const [selectedReceipt, setSelectedReceipt] = useState(null);
@@ -137,14 +162,13 @@ export default function StockInPage() {
   });
 
   // Phiếu nhập
-  const [partner, setPartner] = useState("");
+  const [partner, setPartner] = useState(""); // ✅ hiển thị, không cho sửa
   const [note, setNote] = useState("");
 
   // 1 dòng nhập
   const newRow = () => ({
     materialId: "",
     qty: 1,
-    price: "", // user tự nhập (không auto format)
   });
 
   const [rows, setRows] = useState([newRow()]);
@@ -188,6 +212,37 @@ export default function StockInPage() {
     setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
   };
 
+  // ✅ Tự động “gán” NCC theo vật liệu đã chọn
+  const derivedPartner = useMemo(() => {
+    const suppliers = new Set();
+    rows.forEach((r) => {
+      const m = selectedMaterialMap.get(String(r.materialId));
+      const s = (m ? pickSupplier(m) : "").trim();
+      if (s) suppliers.add(s);
+    });
+
+    if (suppliers.size === 0) return "";
+    if (suppliers.size === 1) return Array.from(suppliers)[0];
+    return "Nhiều nhà cung cấp";
+  }, [rows, selectedMaterialMap]);
+
+  useEffect(() => {
+    setPartner(derivedPartner);
+  }, [derivedPartner]);
+
+  // ✅ Tổng tiền phiếu đang nhập (TÍNH THEO GIÁ TRONG KHO)
+  const draftTotalMoney = useMemo(
+    () =>
+      rows.reduce((sum, r) => {
+        const qty = Number(r?.qty || 0);
+        if (!r?.materialId || qty <= 0) return sum;
+        const m = selectedMaterialMap.get(String(r.materialId));
+        const price = m ? pickImportPrice(m) : 0;
+        return sum + qty * price;
+      }, 0),
+    [rows, selectedMaterialMap]
+  );
+
   const createQuickMaterial = async () => {
     try {
       const code = mform.code.trim();
@@ -198,9 +253,7 @@ export default function StockInPage() {
         return;
       }
 
-      // gửi cả 2 format field để backend nào cũng nhận
       const payload = {
-        // kiểu A
         maVatLieu: code,
         tenVatLieu: name,
         loai: mform.category?.trim() || "",
@@ -210,7 +263,6 @@ export default function StockInPage() {
         nhaCungCap: mform.supplier?.trim() || "",
         soLuongTon: 0,
 
-        // kiểu B
         code,
         name,
         category: mform.category?.trim() || "",
@@ -241,14 +293,18 @@ export default function StockInPage() {
     }
   };
 
+  // ✅ SUBMIT
   const submitStockIn = async () => {
     try {
       const items = rows
-        .map((r) => ({
-          material: r.materialId,
-          soLuong: Number(r.qty || 0),
-          giaNhap: parseMoneyVN(r.price),
-        }))
+        .map((r) => {
+          const m = selectedMaterialMap.get(String(r.materialId));
+          return {
+            material: r.materialId,
+            soLuong: Number(r.qty || 0),
+            giaNhap: m ? pickImportPrice(m) : 0,
+          };
+        })
         .filter((x) => x.material && x.soLuong > 0);
 
       if (items.length === 0) {
@@ -257,15 +313,15 @@ export default function StockInPage() {
       }
 
       await createStockIn({
-        partner: partner?.trim() || "",
+        partner: (derivedPartner || "").trim(),
         note: note?.trim() || "",
         items,
       });
 
       alert("✅ Tạo phiếu nhập kho thành công!");
-      setPartner("");
       setNote("");
       setRows([newRow()]);
+      setSearchReceipt("");
       await loadAll();
     } catch (e) {
       alert(apiMsg(e));
@@ -285,10 +341,34 @@ export default function StockInPage() {
 
   const selectedSummary = useMemo(() => calcReceiptSummary(selectedReceipt), [selectedReceipt]);
 
+  const filteredHistory = useMemo(() => {
+    const q = (searchReceipt || "").trim().toUpperCase();
+    if (!q) return history;
+    return history.filter((h) => pickReceiptCode(h).toUpperCase().includes(q));
+  }, [history, searchReceipt]);
+
+  const foundCount = useMemo(() => filteredHistory.length, [filteredHistory]);
+
+  /** ===== UI ===== */
+  const inputBase = {
+    width: "100%",
+    padding: 10,
+    borderRadius: 12,
+    border: "1px solid #e5e7eb",
+    background: "#fff",
+    fontSize: 13,
+  };
+
+  const readOnlyInput = {
+    ...inputBase,
+    background: "#f1f5f9",
+    cursor: "not-allowed",
+  };
+
   return (
     <div
       style={{
-        background: "#f5f7fb",
+        background: "#f6f8fc",
         minHeight: "100vh",
         padding: 24,
         fontFamily:
@@ -303,34 +383,62 @@ export default function StockInPage() {
         style={{
           maxWidth: 1200,
           margin: "0 auto",
-          background: "white",
           borderRadius: 16,
           padding: 14,
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          boxShadow: "0 8px 24px rgba(0,0,0,0.06)",
+          boxShadow: "0 10px 26px rgba(15,23,42,0.06)",
           border: "1px solid rgba(229,231,235,0.9)",
+          background:
+            "linear-gradient(135deg, rgba(255,255,255,0.95), rgba(248,250,252,0.98))",
         }}
       >
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          <img src={TTQLogo} alt="TTQ" style={{ width: 34, height: 34, borderRadius: 10 }} />
+          <img
+            src={TTQLogo}
+            alt="TTQ"
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 10,
+              background: "#fff",
+              border: "1px solid #e5e7eb",
+              objectFit: "contain",
+            }}
+          />
           <div>
             <div style={{ fontWeight: 950, fontSize: 15 }}>TTQ Warehouse</div>
-            <div style={{ fontSize: 12, color: "#64748b" }}>Nhập kho · Xin chào, bạn</div>
+            <div style={{ fontSize: 12, color: "#64748b" }}>
+              Nhập kho · Phiếu nhập vật liệu
+            </div>
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <div
+            style={{
+              fontSize: 11,
+              padding: "6px 10px",
+              borderRadius: 999,
+              border: "1px solid #e2e8f0",
+              background: "#f8fafc",
+              color: "#0f172a",
+            }}
+          >
+            Chế độ: <b>Nhập kho</b>
+          </div>
+
           <button
             onClick={loadAll}
             style={{
               border: "1px solid #e6e8ee",
               background: "white",
               borderRadius: 12,
-              padding: "10px 14px",
+              padding: "9px 14px",
               fontWeight: 900,
               cursor: "pointer",
+              fontSize: 13,
             }}
           >
             {loading ? "Đang tải..." : "Làm mới"}
@@ -339,24 +447,27 @@ export default function StockInPage() {
             onClick={() => nav("/materials")}
             style={{
               border: "1px solid #e6e8ee",
-              background: "white",
+              background: "#0f172a",
+              color: "#fff",
               borderRadius: 12,
-              padding: "10px 14px",
+              padding: "9px 14px",
               fontWeight: 900,
               cursor: "pointer",
+              fontSize: 13,
             }}
           >
             Sang kho hàng
           </button>
           <button
-            onClick={() => nav("/")}
+            onClick={() => nav("/dashboard")}
             style={{
               border: "1px solid #e6e8ee",
               background: "white",
               borderRadius: 12,
-              padding: "10px 14px",
+              padding: "9px 14px",
               fontWeight: 900,
               cursor: "pointer",
+              fontSize: 13,
             }}
           >
             Về trang chính
@@ -364,28 +475,122 @@ export default function StockInPage() {
         </div>
       </div>
 
+      {/* BODY */}
       <div style={{ maxWidth: 1200, margin: "18px auto 0" }}>
-        <h2 style={{ margin: "14px 0 6px", fontSize: 22, fontWeight: 950 }}>Nhập hàng</h2>
-        <div style={{ color: "#64748b", marginBottom: 12 }}>
-          Tạo mặt hàng nhanh (nếu kho chưa có) và lập phiếu nhập để tự tăng tồn trong “Kho hàng”.
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-end",
+            gap: 12,
+            marginBottom: 8,
+          }}
+        >
+          <div>
+            <h2 style={{ margin: "6px 0 4px", fontSize: 22, fontWeight: 950 }}>Nhập hàng</h2>
+            <div style={{ color: "#64748b" }}>
+              Tạo nhanh mặt hàng (nếu kho chưa có) và lập phiếu nhập để tự tăng tồn trong
+              “Kho hàng”.
+            </div>
+          </div>
+
+          <div
+            style={{
+              borderRadius: 12,
+              padding: "8px 12px",
+              background: "#eff6ff",
+              border: "1px solid #dbeafe",
+              fontSize: 12,
+              fontWeight: 900,
+              color: "#1d4ed8",
+              minWidth: 200,
+              textAlign: "right",
+            }}
+          >
+            Tạm tính phiếu mới: {money(draftTotalMoney)} đ
+          </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 14 }}>
-          {/* LEFT */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1.45fr 1fr",
+            gap: 16,
+            alignItems: "flex-start",
+          }}
+        >
+          {/* LEFT – FORM PHIẾU */}
           <div
             style={{
               background: "white",
-              borderRadius: 16,
+              borderRadius: 18,
               padding: 16,
-              boxShadow: "0 8px 24px rgba(0,0,0,0.06)",
+              boxShadow: "0 10px 26px rgba(15,23,42,0.06)",
               border: "1px solid rgba(229,231,235,0.9)",
             }}
           >
-            <div style={{ fontWeight: 950, marginBottom: 10 }}>Tạo phiếu nhập kho</div>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 10,
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 950, fontSize: 15 }}>Phiếu nhập mới</div>
+                <div style={{ fontSize: 12, color: "#64748b" }}>
+                  1. Tạo mặt hàng (nếu cần) · 2. Thêm dòng nhập · 3. Xác nhận phiếu.
+                </div>
+              </div>
+              <div
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: 999,
+                  background: "#f9fafb",
+                  border: "1px solid #e5e7eb",
+                  fontSize: 11,
+                  color: "#64748b",
+                }}
+              >
+                Tổng dòng: {rows.length}
+              </div>
+            </div>
 
             {/* Quick material */}
-            <div style={{ background: "#f8fafc", border: "1px solid #eef2f7", borderRadius: 14, padding: 14 }}>
-              <div style={{ fontWeight: 900, marginBottom: 10 }}>Tạo mặt hàng mới nhanh (nếu kho chưa có)</div>
+            <div
+              style={{
+                background: "#f8fafc",
+                border: "1px solid #eef2f7",
+                borderRadius: 14,
+                padding: 14,
+                marginBottom: 14,
+              }}
+            >
+              <div
+                style={{
+                  fontWeight: 900,
+                  marginBottom: 10,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <span>Tạo mặt hàng mới nhanh (nếu kho chưa có)</span>
+                <span
+                  style={{
+                    fontSize: 11,
+                    padding: "4px 8px",
+                    borderRadius: 999,
+                    background: "#e0f2fe",
+                    color: "#0369a1",
+                    fontWeight: 800,
+                  }}
+                >
+                  Tuỳ chọn
+                </span>
+              </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <div>
@@ -394,7 +599,7 @@ export default function StockInPage() {
                     value={mform.code}
                     onChange={(e) => setMform({ ...mform, code: e.target.value })}
                     placeholder="VD: C01"
-                    style={{ width: "100%", padding: 10, borderRadius: 12, border: "1px solid #e5e7eb" }}
+                    style={inputBase}
                   />
                 </div>
 
@@ -404,7 +609,7 @@ export default function StockInPage() {
                     value={mform.name}
                     onChange={(e) => setMform({ ...mform, name: e.target.value })}
                     placeholder="VD: Cát"
-                    style={{ width: "100%", padding: 10, borderRadius: 12, border: "1px solid #e5e7eb" }}
+                    style={inputBase}
                   />
                 </div>
 
@@ -414,17 +619,16 @@ export default function StockInPage() {
                     value={mform.category}
                     onChange={(e) => setMform({ ...mform, category: e.target.value })}
                     placeholder="VD: Vật liệu xây dựng"
-                    style={{ width: "100%", padding: 10, borderRadius: 12, border: "1px solid #e5e7eb" }}
+                    style={inputBase}
                   />
                 </div>
 
-                {/* Dropdown ĐVT */}
                 <div>
                   <div style={{ fontWeight: 900, fontSize: 13, marginBottom: 6 }}>ĐVT</div>
                   <select
                     value={mform.unit}
                     onChange={(e) => setMform({ ...mform, unit: e.target.value })}
-                    style={{ width: "100%", padding: 10, borderRadius: 12, border: "1px solid #e5e7eb" }}
+                    style={inputBase}
                   >
                     <option value="">-- Chọn đơn vị --</option>
                     {UNIT_OPTIONS.map((u) => (
@@ -435,14 +639,13 @@ export default function StockInPage() {
                   </select>
                 </div>
 
-                {/* TIỀN: nhập tự do */}
                 <div>
                   <div style={{ fontWeight: 900, fontSize: 13, marginBottom: 6 }}>Giá nhập</div>
                   <input
                     value={mform.importPrice}
                     onChange={(e) => setMform({ ...mform, importPrice: e.target.value })}
                     placeholder="VD: 11100000 hoặc 11.100.000"
-                    style={{ width: "100%", padding: 10, borderRadius: 12, border: "1px solid #e5e7eb" }}
+                    style={inputBase}
                   />
                   <div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>
                     = {money(parseMoneyVN(mform.importPrice))}
@@ -455,7 +658,7 @@ export default function StockInPage() {
                     value={mform.sellPrice}
                     onChange={(e) => setMform({ ...mform, sellPrice: e.target.value })}
                     placeholder="VD: 120000 hoặc 120.000"
-                    style={{ width: "100%", padding: 10, borderRadius: 12, border: "1px solid #e5e7eb" }}
+                    style={inputBase}
                   />
                   <div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>
                     = {money(parseMoneyVN(mform.sellPrice))}
@@ -468,7 +671,7 @@ export default function StockInPage() {
                     value={mform.supplier}
                     onChange={(e) => setMform({ ...mform, supplier: e.target.value })}
                     placeholder="VD: Cát Đồng Tháp"
-                    style={{ width: "100%", padding: 10, borderRadius: 12, border: "1px solid #e5e7eb" }}
+                    style={inputBase}
                   />
                 </div>
               </div>
@@ -484,6 +687,7 @@ export default function StockInPage() {
                   padding: "10px 14px",
                   fontWeight: 950,
                   cursor: "pointer",
+                  fontSize: 13,
                 }}
               >
                 + Tạo mặt hàng mới
@@ -491,11 +695,20 @@ export default function StockInPage() {
             </div>
 
             {/* Add rows */}
-            <div style={{ marginTop: 14 }}>
+            <div>
               <div style={{ fontWeight: 950, marginBottom: 10 }}>Thêm dòng nhập</div>
 
               {rows.map((r, idx) => {
                 const m = selectedMaterialMap.get(String(r.materialId));
+
+                const matCode = m ? pickMatCode(m) : "";
+                const matName = m ? pickMatName(m) : "";
+                const matUnit = m ? pickUnit(m) : "";
+                const importPriceFromKho = m ? pickImportPrice(m) : 0;
+
+                const lineTotal =
+                  (Number(r?.qty || 0) > 0 ? Number(r?.qty || 0) : 0) * importPriceFromKho;
+
                 return (
                   <div
                     key={idx}
@@ -504,16 +717,28 @@ export default function StockInPage() {
                       borderRadius: 14,
                       padding: 12,
                       marginBottom: 10,
-                      background: "white",
+                      background: "#fff",
                     }}
                   >
-                    <div style={{ display: "grid", gridTemplateColumns: "1.3fr 0.5fr 0.7fr auto", gap: 10 }}>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "1.3fr 0.5fr 0.7fr auto",
+                        gap: 10,
+                      }}
+                    >
                       <div>
-                        <div style={{ fontWeight: 900, fontSize: 13, marginBottom: 6 }}>Chọn mặt hàng trong kho</div>
+                        <div
+                          style={{ fontWeight: 900, fontSize: 13, marginBottom: 6 }}
+                        >
+                          Chọn mặt hàng trong kho
+                        </div>
                         <select
                           value={r.materialId}
-                          onChange={(e) => onChangeRow(idx, { materialId: e.target.value })}
-                          style={{ width: "100%", padding: 10, borderRadius: 12, border: "1px solid #e5e7eb" }}
+                          onChange={(e) =>
+                            onChangeRow(idx, { materialId: e.target.value })
+                          }
+                          style={inputBase}
                         >
                           <option value="">-- Chọn mặt hàng --</option>
                           {materials.map((x) => {
@@ -530,42 +755,150 @@ export default function StockInPage() {
 
                         <div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>
                           {m
-                            ? `ĐVT: ${m.donViTinh || m.unit || "-"} | NCC: ${m.nhaCungCap || m.supplier || "-"}`
+                            ? `ĐVT: ${m.donViTinh || m.unit || "-"} • NCC: ${
+                                m.nhaCungCap || m.supplier || "-"
+                              }`
                             : " "}
+                        </div>
+
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "0.8fr 1.4fr 0.6fr",
+                            gap: 8,
+                            marginTop: 10,
+                          }}
+                        >
+                          <div>
+                            <div
+                              style={{
+                                fontWeight: 900,
+                                fontSize: 12,
+                                marginBottom: 6,
+                                color: "#334155",
+                              }}
+                            >
+                              Mã hàng
+                            </div>
+                            <input
+                              value={matCode}
+                              readOnly
+                              disabled
+                              style={readOnlyInput}
+                              placeholder="(tự động)"
+                            />
+                          </div>
+
+                          <div>
+                            <div
+                              style={{
+                                fontWeight: 900,
+                                fontSize: 12,
+                                marginBottom: 6,
+                                color: "#334155",
+                              }}
+                            >
+                              Tên hàng
+                            </div>
+                            <input
+                              value={matName}
+                              readOnly
+                              disabled
+                              style={readOnlyInput}
+                              placeholder="(tự động)"
+                            />
+                          </div>
+
+                          <div>
+                            <div
+                              style={{
+                                fontWeight: 900,
+                                fontSize: 12,
+                                marginBottom: 6,
+                                color: "#334155",
+                              }}
+                            >
+                              ĐVT
+                            </div>
+                            <input
+                              value={matUnit}
+                              readOnly
+                              disabled
+                              style={readOnlyInput}
+                              placeholder="(tự động)"
+                            />
+                          </div>
+                        </div>
+
+                        <div style={{ marginTop: 10 }}>
+                          <div
+                            style={{
+                              fontWeight: 900,
+                              fontSize: 12,
+                              marginBottom: 6,
+                              color: "#334155",
+                            }}
+                          >
+                            Thành tiền
+                          </div>
+                          <input
+                            value={money(lineTotal)}
+                            readOnly
+                            disabled
+                            style={{
+                              ...readOnlyInput,
+                              background: "#f8fafc",
+                              fontWeight: 950,
+                            }}
+                          />
                         </div>
                       </div>
 
                       <div>
-                        <div style={{ fontWeight: 900, fontSize: 13, marginBottom: 6 }}>Số lượng</div>
+                        <div
+                          style={{ fontWeight: 900, fontSize: 13, marginBottom: 6 }}
+                        >
+                          Số lượng
+                        </div>
                         <input
                           type="number"
                           min="1"
                           value={r.qty}
-                          onChange={(e) => onChangeRow(idx, { qty: e.target.value })}
-                          style={{ width: "100%", padding: 10, borderRadius: 12, border: "1px solid #e5e7eb" }}
+                          onChange={(e) =>
+                            onChangeRow(idx, { qty: e.target.value })
+                          }
+                          style={inputBase}
                         />
                       </div>
 
                       <div>
-                        <div style={{ fontWeight: 900, fontSize: 13, marginBottom: 6 }}>Giá nhập (có thể sửa)</div>
+                        <div
+                          style={{ fontWeight: 900, fontSize: 13, marginBottom: 6 }}
+                        >
+                          Giá nhập
+                        </div>
                         <input
-                          value={r.price}
-                          onChange={(e) => onChangeRow(idx, { price: e.target.value })}
-                          placeholder={
-                            m?.giaNhap
-                              ? money(m.giaNhap)
-                              : m?.importPrice
-                              ? money(m.importPrice)
-                              : "VD: 100000 hoặc 100.000"
-                          }
-                          style={{ width: "100%", padding: 10, borderRadius: 12, border: "1px solid #e5e7eb" }}
+                          value={m ? money(importPriceFromKho) : ""}
+                          disabled
+                          readOnly
+                          placeholder="tự động"
+                          style={{
+                            ...readOnlyInput,
+                            fontWeight: 900,
+                          }}
                         />
                         <div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>
-                          = {money(parseMoneyVN(r.price))}
+                          = {money(importPriceFromKho)}
                         </div>
                       </div>
 
-                      <div style={{ display: "flex", alignItems: "end", gap: 8 }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "flex-end",
+                          justifyContent: "flex-end",
+                        }}
+                      >
                         <button
                           onClick={() => onRemoveRow(idx)}
                           disabled={rows.length === 1}
@@ -575,7 +908,8 @@ export default function StockInPage() {
                             borderRadius: 12,
                             padding: "10px 12px",
                             fontWeight: 900,
-                            cursor: rows.length === 1 ? "not-allowed" : "pointer",
+                            cursor:
+                              rows.length === 1 ? "not-allowed" : "pointer",
                             opacity: rows.length === 1 ? 0.6 : 1,
                           }}
                         >
@@ -591,34 +925,88 @@ export default function StockInPage() {
                 onClick={onAddRow}
                 style={{
                   border: "1px solid #e5e7eb",
-                  background: "white",
+                  background: "#f9fafb",
                   borderRadius: 12,
                   padding: "10px 14px",
                   fontWeight: 950,
                   cursor: "pointer",
+                  fontSize: 13,
                 }}
               >
                 + Thêm dòng
               </button>
 
-              <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div
+                style={{
+                  marginTop: 14,
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 10,
+                }}
+              >
                 <div>
-                  <div style={{ fontWeight: 900, fontSize: 13, marginBottom: 6 }}>Nhà cung cấp / Đối tác (tuỳ chọn)</div>
+                  <div
+                    style={{ fontWeight: 900, fontSize: 13, marginBottom: 6 }}
+                  >
+                    Nhà cung cấp / Đối tác
+                  </div>
                   <input
                     value={partner}
-                    onChange={(e) => setPartner(e.target.value)}
-                    placeholder="VD: Cát Đồng Tháp"
-                    style={{ width: "100%", padding: 10, borderRadius: 12, border: "1px solid #e5e7eb" }}
+                    disabled
+                    readOnly
+                    placeholder="tự động"
+                    style={readOnlyInput}
                   />
+                  <div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>
+                    {partner === "Nhiều nhà cung cấp"
+                      ? "Bạn đang chọn nhiều mặt hàng thuộc nhiều NCC khác nhau."
+                      : " "}
+                  </div>
                 </div>
+
                 <div>
-                  <div style={{ fontWeight: 900, fontSize: 13, marginBottom: 6 }}>Ghi chú (tuỳ chọn)</div>
+                  <div
+                    style={{ fontWeight: 900, fontSize: 13, marginBottom: 6 }}
+                  >
+                    Ghi chú (tuỳ chọn)
+                  </div>
                   <input
                     value={note}
                     onChange={(e) => setNote(e.target.value)}
-                    placeholder="VD: Nhập thêm để kịp đơn hàng"
-                    style={{ width: "100%", padding: 10, borderRadius: 12, border: "1px solid #e5e7eb" }}
+                    style={inputBase}
                   />
+                </div>
+              </div>
+
+              <div
+                style={{
+                  marginTop: 12,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 10,
+                  flexWrap: "wrap",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "#64748b",
+                  }}
+                >
+                  Sau khi lưu, tồn kho sẽ tự động tăng trong “Kho hàng”.
+                </div>
+
+                <div
+                  style={{
+                    background: "#f8fafc",
+                    border: "1px solid #eef2f7",
+                    borderRadius: 14,
+                    padding: "10px 12px",
+                    fontWeight: 950,
+                  }}
+                >
+                  Tổng tiền phiếu: {money(draftTotalMoney)} đ
                 </div>
               </div>
 
@@ -630,9 +1018,10 @@ export default function StockInPage() {
                   background: "#111827",
                   color: "white",
                   borderRadius: 12,
-                  padding: "12px 14px",
+                  padding: "12px 16px",
                   fontWeight: 950,
                   cursor: "pointer",
+                  fontSize: 14,
                 }}
               >
                 Tạo phiếu nhập kho
@@ -640,28 +1029,81 @@ export default function StockInPage() {
             </div>
           </div>
 
-          {/* RIGHT */}
+          {/* RIGHT – LỊCH SỬ PHIẾU */}
           <div
             style={{
               background: "white",
-              borderRadius: 16,
+              borderRadius: 18,
               padding: 16,
-              boxShadow: "0 8px 24px rgba(0,0,0,0.06)",
-              height: "fit-content",
+              boxShadow: "0 10px 26px rgba(15,23,42,0.06)",
               border: "1px solid rgba(229,231,235,0.9)",
+              maxHeight: 640,
+              display: "flex",
+              flexDirection: "column",
             }}
           >
-            <div style={{ fontWeight: 950, marginBottom: 6 }}>Lịch sử nhập gần đây</div>
-            <div style={{ color: "#64748b", marginBottom: 12 }}>
+            <div style={{ fontWeight: 950, marginBottom: 4 }}>Lịch sử nhập gần đây</div>
+            <div style={{ color: "#64748b", marginBottom: 12, fontSize: 13 }}>
               Sau khi tạo phiếu nhập, hệ thống sẽ tự tăng tồn kho trong “Kho hàng”.
             </div>
 
-            {history.length === 0 ? (
-              <div style={{ color: "#64748b" }}>Chưa có phiếu nhập nào.</div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {history.map((h) => {
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr auto",
+                gap: 8,
+                marginBottom: 10,
+                alignItems: "center",
+              }}
+            >
+              <input
+                value={searchReceipt}
+                onChange={(e) => setSearchReceipt(e.target.value)}
+                placeholder="Tìm theo mã phiếu (VD: 6D90B1)"
+                style={inputBase}
+              />
+              <button
+                onClick={() => setSearchReceipt("")}
+                style={{
+                  border: "1px solid #e5e7eb",
+                  background: "white",
+                  borderRadius: 12,
+                  padding: "9px 12px",
+                  fontWeight: 900,
+                  cursor: "pointer",
+                  fontSize: 13,
+                }}
+              >
+                Xoá
+              </button>
+            </div>
+
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8 }}>
+              {searchReceipt?.trim()
+                ? `Kết quả: ${foundCount} phiếu`
+                : `Tổng: ${history.length} phiếu`}
+            </div>
+
+            <div
+              style={{
+                flex: 1,
+                overflowY: "auto",
+                display: "flex",
+                flexDirection: "column",
+                gap: 10,
+                paddingRight: 4,
+              }}
+            >
+              {filteredHistory.length === 0 ? (
+                <div style={{ color: "#64748b", fontSize: 13 }}>
+                  {searchReceipt?.trim()
+                    ? "Không tìm thấy phiếu nào theo mã này."
+                    : "Chưa có phiếu nhập nào."}
+                </div>
+              ) : (
+                filteredHistory.map((h) => {
                   const { lines, totalQty, totalMoney } = calcReceiptSummary(h);
+                  const code = pickReceiptCode(h);
                   return (
                     <div
                       key={h._id || h.id}
@@ -672,20 +1114,39 @@ export default function StockInPage() {
                         background: "#fff",
                       }}
                     >
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                        <div style={{ fontWeight: 950 }}>
-                          Phiếu #{String(h._id || h.id || "").slice(-6).toUpperCase()}
-                        </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: 10,
+                          alignItems: "baseline",
+                        }}
+                      >
+                        <div style={{ fontWeight: 950 }}>Phiếu #{code}</div>
                         <div style={{ color: "#64748b", fontSize: 12 }}>
-                          {h.createdAt ? new Date(h.createdAt).toLocaleString("vi-VN") : ""}
+                          {h.createdAt
+                            ? new Date(h.createdAt).toLocaleString("vi-VN")
+                            : ""}
                         </div>
                       </div>
 
-                      <div style={{ marginTop: 6, fontSize: 13, color: "#334155" }}>
+                      <div
+                        style={{
+                          marginTop: 6,
+                          fontSize: 13,
+                          color: "#334155",
+                        }}
+                      >
                         Đối tác: <b>{h.partner || h.supplier || "-"}</b>
                       </div>
 
-                      <div style={{ marginTop: 8, fontSize: 13, color: "#334155" }}>
+                      <div
+                        style={{
+                          marginTop: 8,
+                          fontSize: 13,
+                          color: "#334155",
+                        }}
+                      >
                         <b>Tổng:</b> {lines} dòng • SL: {totalQty} • Thành tiền:{" "}
                         <b>{money(totalMoney)}</b>
                       </div>
@@ -700,6 +1161,7 @@ export default function StockInPage() {
                             padding: "9px 12px",
                             fontWeight: 950,
                             cursor: "pointer",
+                            fontSize: 13,
                           }}
                         >
                           Xem chi tiết
@@ -707,9 +1169,9 @@ export default function StockInPage() {
                       </div>
                     </div>
                   );
-                })}
-              </div>
-            )}
+                })
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -719,52 +1181,120 @@ export default function StockInPage() {
         open={detailOpen}
         title={
           selectedReceipt
-            ? `Chi tiết phiếu #${String(selectedReceipt._id || selectedReceipt.id || "")
-                .slice(-6)
-                .toUpperCase()}`
+            ? `Chi tiết phiếu #${pickReceiptCode(selectedReceipt)}`
             : "Chi tiết phiếu"
         }
         onClose={closeDetail}
       >
         {!selectedReceipt ? null : (
           <div style={{ display: "grid", gap: 12 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 10,
+              }}
+            >
               <div>
-                <div style={{ fontSize: 12, color: "#64748b", fontWeight: 900 }}>Đối tác</div>
-                <div style={{ fontWeight: 950, marginTop: 4 }}>{selectedReceipt.partner || selectedReceipt.supplier || "-"}</div>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "#64748b",
+                    fontWeight: 900,
+                  }}
+                >
+                  Đối tác
+                </div>
+                <div style={{ fontWeight: 950, marginTop: 4 }}>
+                  {selectedReceipt.partner || selectedReceipt.supplier || "-"}
+                </div>
               </div>
               <div>
-                <div style={{ fontSize: 12, color: "#64748b", fontWeight: 900 }}>Thời gian</div>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "#64748b",
+                    fontWeight: 900,
+                  }}
+                >
+                  Thời gian
+                </div>
                 <div style={{ fontWeight: 950, marginTop: 4 }}>
-                  {selectedReceipt.createdAt ? new Date(selectedReceipt.createdAt).toLocaleString("vi-VN") : "-"}
+                  {selectedReceipt.createdAt
+                    ? new Date(selectedReceipt.createdAt).toLocaleString("vi-VN")
+                    : "-"}
                 </div>
               </div>
             </div>
 
             {selectedReceipt.note ? (
               <div>
-                <div style={{ fontSize: 12, color: "#64748b", fontWeight: 900 }}>Ghi chú</div>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "#64748b",
+                    fontWeight: 900,
+                  }}
+                >
+                  Ghi chú
+                </div>
                 <div style={{ marginTop: 4 }}>{selectedReceipt.note}</div>
               </div>
             ) : null}
 
             <div style={{ borderTop: "1px solid #eef2f7", paddingTop: 10 }}>
-              <div style={{ fontWeight: 950, marginBottom: 10 }}>Danh sách mặt hàng</div>
+              <div style={{ fontWeight: 950, marginBottom: 10 }}>
+                Danh sách mặt hàng
+              </div>
 
               <div style={{ overflow: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <table
+                  style={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    fontSize: 13,
+                  }}
+                >
                   <thead>
                     <tr style={{ textAlign: "left" }}>
-                      <th style={{ borderBottom: "1px solid #eef2f7", padding: "8px 8px", fontSize: 12, color: "#64748b" }}>
+                      <th
+                        style={{
+                          borderBottom: "1px solid #eef2f7",
+                          padding: "8px 8px",
+                          fontSize: 12,
+                          color: "#64748b",
+                        }}
+                      >
                         Mặt hàng
                       </th>
-                      <th style={{ borderBottom: "1px solid #eef2f7", padding: "8px 8px", fontSize: 12, color: "#64748b" }}>
+                      <th
+                        style={{
+                          borderBottom: "1px solid #eef2f7",
+                          padding: "8px 8px",
+                          fontSize: 12,
+                          color: "#64748b",
+                        }}
+                      >
                         SL
                       </th>
-                      <th style={{ borderBottom: "1px solid #eef2f7", padding: "8px 8px", fontSize: 12, color: "#64748b" }}>
+                      <th
+                        style={{
+                          borderBottom: "1px solid #eef2f7",
+                          padding: "8px 8px",
+                          fontSize: 12,
+                          color: "#64748b",
+                        }}
+                      >
                         Giá nhập
                       </th>
-                      <th style={{ borderBottom: "1px solid #eef2f7", padding: "8px 8px", fontSize: 12, color: "#64748b" }}>
+                      <th
+                        style={{
+                          borderBottom: "1px solid #eef2f7",
+                          padding: "8px 8px",
+                          fontSize: 12,
+                          color: "#64748b",
+                        }}
+                      >
                         Thành tiền
                       </th>
                     </tr>
@@ -777,18 +1307,46 @@ export default function StockInPage() {
                         it?.materialName ||
                         it?.tenVatLieu ||
                         "Mặt hàng";
-                      const qty = Number(it?.soLuong ?? it?.qty ?? it?.quantity ?? 0);
+                      const qty = Number(
+                        it?.soLuong ?? it?.qty ?? it?.quantity ?? 0
+                      );
                       const price = Number(it?.giaNhap ?? it?.price ?? 0);
                       const lineTotal = qty * price;
 
                       return (
                         <tr key={idx}>
-                          <td style={{ borderBottom: "1px solid #f1f5f9", padding: "10px 8px", fontWeight: 900 }}>
+                          <td
+                            style={{
+                              borderBottom: "1px solid #f1f5f9",
+                              padding: "10px 8px",
+                              fontWeight: 900,
+                            }}
+                          >
                             {name}
                           </td>
-                          <td style={{ borderBottom: "1px solid #f1f5f9", padding: "10px 8px" }}>{qty}</td>
-                          <td style={{ borderBottom: "1px solid #f1f5f9", padding: "10px 8px" }}>{money(price)}</td>
-                          <td style={{ borderBottom: "1px solid #f1f5f9", padding: "10px 8px", fontWeight: 950 }}>
+                          <td
+                            style={{
+                              borderBottom: "1px solid #f1f5f9",
+                              padding: "10px 8px",
+                            }}
+                          >
+                            {qty}
+                          </td>
+                          <td
+                            style={{
+                              borderBottom: "1px solid #f1f5f9",
+                              padding: "10px 8px",
+                            }}
+                          >
+                            {money(price)}
+                          </td>
+                          <td
+                            style={{
+                              borderBottom: "1px solid #f1f5f9",
+                              padding: "10px 8px",
+                              fontWeight: 950,
+                            }}
+                          >
                             {money(lineTotal)}
                           </td>
                         </tr>
@@ -798,7 +1356,13 @@ export default function StockInPage() {
                 </table>
               </div>
 
-              <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
+              <div
+                style={{
+                  marginTop: 12,
+                  display: "flex",
+                  justifyContent: "flex-end",
+                }}
+              >
                 <div
                   style={{
                     background: "#f8fafc",
@@ -808,7 +1372,8 @@ export default function StockInPage() {
                     fontWeight: 950,
                   }}
                 >
-                  Tổng dòng: {selectedSummary.lines} • Tổng SL: {selectedSummary.totalQty} • Tổng tiền:{" "}
+                  Tổng dòng: {selectedSummary.lines} • Tổng SL:{" "}
+                  {selectedSummary.totalQty} • Tổng tiền:{" "}
                   {money(selectedSummary.totalMoney)}
                 </div>
               </div>

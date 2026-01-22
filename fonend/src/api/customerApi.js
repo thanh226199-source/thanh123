@@ -1,15 +1,24 @@
+// src/api/customerApi.js
 import axiosClient from "./axiosClient";
 
-const toArray = (x) => {
-  if (Array.isArray(x)) return x;
-  if (Array.isArray(x?.data)) return x.data;
-  if (Array.isArray(x?.items)) return x.items;
-  if (Array.isArray(x?.customers)) return x.customers;
+const toArray = (res) => {
+  // axiosClient đã return response.data
+  if (Array.isArray(res)) return res;
+
+  // các kiểu backend hay trả
+  if (Array.isArray(res?.data)) return res.data;
+  if (Array.isArray(res?.items)) return res.items;
+  if (Array.isArray(res?.customers)) return res.customers;
+
+  // trường hợp trả { results: [] }
+  if (Array.isArray(res?.results)) return res.results;
+
   return [];
 };
 
 export const getCustomers = async (q = "") => {
-  const res = await axiosClient.get("/customers", { params: q ? { q } : undefined });
+  const params = q ? { q } : {};
+  const res = await axiosClient.get("/customers", { params });
   return toArray(res);
 };
 
